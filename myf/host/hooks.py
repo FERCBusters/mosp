@@ -44,15 +44,11 @@ def sign_in_methods() -> dict[str, Any]:
     return {} if hook is None else dict(hook())
 
 
-def route_class() -> type:
-    """The route class myf's routers use, so the application's error contract
-    and per-route dependencies apply to them (default: FastAPI's APIRoute)."""
-    hook = _hook("route_class")
-    if hook is None:
-        from fastapi.routing import APIRoute
-
-        return APIRoute
-    return hook()
+def route_dependencies() -> tuple[Any, ...]:
+    """Dependencies every route of the application runs, such as its feature
+    switches (default: none)."""
+    hook = _hook("route_dependencies")
+    return () if hook is None else tuple(hook())
 
 
 def security_notice(event: str) -> tuple[str, str] | None:
@@ -103,3 +99,69 @@ def issued_secret_pattern() -> Any:
     they appear (default: none)."""
     hook = _hook("issued_secret_pattern")
     return None if hook is None else hook()
+
+
+def route_policy() -> Any:
+    """The application's routes in the route policy
+    (``myf.security.route_policy.RoutePolicy``; default: none)."""
+    hook = _hook("route_policy")
+    return None if hook is None else hook()
+
+
+def json_body_limit(path: str) -> int:
+    """The most JSON parsed from one request to ``path`` (default: the route's
+    body limit)."""
+    hook = _hook("json_body_limit")
+    return body_limit(path) if hook is None else int(hook(path))
+
+
+DEFAULT_JSON_VALUES = 20_000
+
+
+def json_value_limit(path: str) -> int | None:
+    """The most values a JSON request to ``path`` may hold; None for no bound."""
+    hook = _hook("json_value_limit")
+    return DEFAULT_JSON_VALUES if hook is None else hook(path)
+
+
+class NotInner:
+    """The answer of ``inner_request_user`` for a request from outside."""
+
+
+NOT_INNER = NotInner()
+
+
+def inner_request_user(db: Any, request: Any) -> Any:
+    """The account an in-process request acts as (an MCP tool's, say): an
+    account, a refusal response, None when its credential is not current, or
+    NOT_INNER for an ordinary request (default: every request is ordinary)."""
+    hook = _hook("inner_request_user")
+    return NOT_INNER if hook is None else hook(db, request)
+
+
+def bootstrap_allowed() -> bool:
+    """Whether the first administrator may come from the bootstrap settings
+    (default: yes)."""
+    hook = _hook("bootstrap_allowed")
+    return True if hook is None else bool(hook())
+
+
+# The browser pages myf's routes and messages send people to.
+DEFAULT_PAGES = {
+    "home": "/",
+    "sign_in": "/login.html",
+    "account": "/account.html",
+    "second_factor": "/mfa.html",
+    "sso_email": "/sso-email.html",
+}
+
+
+def page(name: str) -> str:
+    """The path of one of the application's pages (default: DEFAULT_PAGES).
+
+    The application's ``pages`` hook returns the paths it changes; the rest
+    keep their defaults.
+    """
+    hook = _hook("pages")
+    own = {} if hook is None else hook()
+    return own.get(name) or DEFAULT_PAGES[name]

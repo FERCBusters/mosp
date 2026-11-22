@@ -13,6 +13,7 @@ from myf import host
 from myf.core.datetime_utils import utc_now_naive as now
 from myf.core.email_address import compared_mailbox
 from myf.core.valkey import get_valkey
+from myf.host import hooks
 from myf.host.config import settings
 from myf.host.models import SsoEmailChallenge, User, UserSsoEmail
 from myf.security.encoding import digest
@@ -157,7 +158,7 @@ def request_address(
             subject=f"Verify your {host.title()} SSO email address",
             body=f"You requested to add {email} to {host.title()} account {user.username}.\n\n"
             f"While signed into that {host.title()} account, open this link and confirm:\n"
-            f"{settings.public_base_url}/sso-email.html#token={token}\n\n"
+            f"{settings.public_base_url}{hooks.page('sso_email')}#token={token}\n\n"
             "This link expires in 30 minutes and works once. If you did not request it, ignore this email.",
         )
     db.commit()

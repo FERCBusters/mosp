@@ -8,9 +8,14 @@ myf ("My Framework") is the shared backend of KEEN, OSPMAE and MIDENA: the sign-
 - **Second factors** (`myf.security.mfa`, `myf.services.mfa_management`, `myf.api.routes.mfa`): TOTP, WebAuthn security keys and passkeys, recovery codes and the pending-ceremony cookie.
 - **Single sign-on** (`myf.security.oidc`, `sso_http`, `myf.services.sso_emails`): OpenID Connect, Google and GitHub for existing accounts only, linked through mailbox-proved addresses, with ID tokens verified under a configured list of asymmetric algorithms and providers reached through a bounded transport.
 - **Browser boundaries** (`myf.security.csrf`, `headers`, `request_limits`): Origin checks, session-bound CSRF tokens, response headers, request-body limits, JSON shape limits, request-target checks and cookie screening.
+- **Request middleware** (`myf.middleware`): CSRF, authentication and the request audit trail, installed together by `myf.middleware.install(app)`, and the first administrator of an empty installation (`bootstrap_initial_admin`).
+- **Route policy** (`myf.security.route_policy`): which routes are public, which writes an account makes for itself, which writes need a permission (one per route, or one of several under a prefix), which namespaces only administrators reach, and which requests the audit trail leaves out. myf declares its own routes (`MYF_POLICY`); the application's `route_policy` hook returns a `RoutePolicy` holding its own, and the two apply together. A write the policy does not name needs an administrator.
+- **Error contract and routing** (`myf.api.errors`, `routing`, `forms`): `Router` and `DomainRoute` give every route strict JSON decoding, form parsing off the event loop, and the same answers for domain, validation and database errors.
 - **Roles and permissions** (`myf.security.roles`, `permissions`): effective roles from accounts and groups, permission checks with cached snapshots; the application supplies its permission catalogue.
+- **Database** (`myf.db.engine`, `accounts`, `sql_trace`): an engine whose statements respect a worker task's deadline, the account model mixins, and SQL statement labels for tracing.
 - **Primitives**: the regular-expression boundary (`regex`), untrusted XML (`xml`), redaction (`redaction`), client addresses and per-address allowances (`client_ip`, `rate_limit`), passwords (`passwords`), email addresses (`myf.core.email_address`), identifiers, rich text and CSV output, task deadlines and SQL statement labels.
 - **Mail and notices** (`myf.services.mailer`, `security_notifications`): SMTP delivery, calendar invitations and the security notices sent to account owners.
+- **Worker** (`myf.worker`, `myf.services.audit_retention`): `myf.worker.connect(celery_app, sql_trace=...)` gives each task its deadline and, when tracing, its statement labels; `remove_expired` keeps the audit trail to its retention period.
 
 ## Using myf in an application
 
@@ -36,21 +41,26 @@ myf.host.bind(
 )
 ```
 
-Its settings class subclasses `myf.config.MyfSettings`, sets its own `env_prefix` and adds its own fields. Hooks (`myf/host/hooks.py`) are where myf asks the application to take part: whether a session still stands, what happens when an account is created, the route class for myf's routers, body limits per route, its permission implications, the tokens it issues for redaction, and its own security notices. A hook an application leaves out keeps myf's default.
+Its settings class subclasses `myf.config.MyfSettings`, sets its own `env_prefix` and adds its own fields; its own checks across fields go in an override of `check_application`, which ends by calling the base class's. Hooks (`myf/host/hooks.py`) are where myf asks the application to take part: its route policy, whether a session still stands, what happens when an account is created, dependencies every route takes, body and JSON limits per route, its permission implications, the tokens it issues for redaction, measured fields redaction keeps, its own security notices, the pages its browser interface serves, and how it authenticates requests of its own (such as an MCP tool's). A hook an application leaves out keeps myf's default.
+
+The application's `main` includes myf's routers (`myf.api.routes.auth`, `mfa`, `sso_emails`) beside its own, then calls `myf.middleware.install(app)`; it creates its engine with `myf.db.engine.application_engine` and connects its Celery app with `myf.worker.connect`.
 
 ### Models
 
-myf reads the application's account models by name: `User`, `Group`, `Permission`, `UserIdentity`, `OidcLoginState`, `MfaCredential`, `MfaRecoveryCode`, `MfaChallenge`, `UserLoginIP`, `SecurityNotification`, `UserSsoEmail`, `SsoEmailChallenge`, `AuditLog`, the `user_groups`, `user_permissions` and `group_permissions` tables, and the columns KEEN's versions of them hold. The application owns these tables and their migrations.
+myf reads the application's account models by name: `User`, `Group`, `Permission`, `UserIdentity`, `OidcLoginState`, `MfaCredential`, `MfaRecoveryCode`, `MfaChallenge`, `UserLoginIP`, `SecurityNotification`, `UserSsoEmail`, `SsoEmailChallenge`, `AuditLog`, and the `user_groups`, `user_permissions` and `group_permissions` tables. `myf.db.accounts` supplies a mixin for each model and `association_tables(metadata)` for the tables; an application declares `class User(Base, UserMixin)` and adds its own columns. The application owns these tables and their migrations.
 
 ## Development
 
+The suite runs against PostgreSQL, each test module in a schema of its own, with an in-memory Valkey:
+
 ```bash
 poetry install
-poetry run pytest
+export MYF_TEST_DATABASE_URL=postgresql+psycopg2://myf_test:myf_test@127.0.0.1:5432/myf_test
+poetry run pytest --cov=myf --cov-branch --cov-fail-under=100
 poetry run ruff check . && poetry run ruff format --check . && poetry run mypy
 ```
 
-myf's own suite binds a small test application (`tests/testapp`) and covers the binding, hooks, settings and stateless primitives. The flows that need an application's database (sign-in, sessions, second factors, single sign-on, permissions) are exercised end to end by each application's suite; KEEN's runs them with branch coverage of myf.
+myf's own suite binds a small test application (`tests/testapp`) that assembles myf as an application does, with a few routes of its own for the route policy, and covers every branch of myf: sign-in, sessions, second factors, single sign-on, directories, permissions, the middleware and the primitives. Each application's suite also runs myf's flows through its own routes and hooks.
 
 `AGENTS.md` describes how to change myf safely; `SECURITY.md` describes how to report a vulnerability.
 

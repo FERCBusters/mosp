@@ -18,12 +18,17 @@ def test_a_role_cannot_be_rebound_to_another_module():
         host.bind(name="testapp", title="TestApp", storage="x")
 
 
-def test_an_unbound_role_says_how_to_bind_it():
+def test_an_unbound_role_says_how_to_bind_it(monkeypatch):
+    monkeypatch.delitem(host._bound, "db")
     with pytest.raises(RuntimeError, match=r"No application is bound to myf's 'db'"):
         host.module("db")
 
 
-def test_hooks_an_application_leaves_out_keep_their_defaults():
+def test_hooks_an_application_leaves_out_keep_their_defaults(monkeypatch):
+    from tests.testapp import hooks as testapp_hooks
+
+    monkeypatch.delattr(testapp_hooks, "route_policy")
+    monkeypatch.delattr(testapp_hooks, "measured_fields")
     assert hooks.session_allowed(None, None, {}) is True
     assert hooks.sign_in_methods() == {}
     assert hooks.permission_implications() == {}
@@ -35,9 +40,12 @@ def test_hooks_an_application_leaves_out_keep_their_defaults():
     assert hooks.security_notice("login-ip") is None
     hooks.user_created(None, None)
     hooks.sso_identity_allowed("oidc", "https://idp.example", "subject")
-    from fastapi.routing import APIRoute
-
-    assert hooks.route_class() is APIRoute
+    assert hooks.route_dependencies() == ()
+    assert hooks.route_policy() is None
+    assert hooks.json_body_limit("/x") == hooks.DEFAULT_BODY_LIMIT
+    assert hooks.json_value_limit("/x") == hooks.DEFAULT_JSON_VALUES
+    assert hooks.inner_request_user(None, None) is hooks.NOT_INNER
+    assert hooks.bootstrap_allowed() is True
 
 
 def test_an_application_hook_replaces_the_default(hook):
@@ -68,3 +76,12 @@ def test_an_application_name_is_a_lower_case_identifier():
     finally:
         _identity.clear()
         _identity.update(saved)
+
+
+def test_the_application_names_its_own_pages(hook):
+    assert hooks.page("account") == "/account.html"
+    hook(pages=lambda: {"account": "/me", "sign_in": ""})
+    assert hooks.page("account") == "/me"
+    # A page the application leaves out, or leaves blank, keeps its default.
+    assert hooks.page("sign_in") == "/login.html"
+    assert hooks.page("home") == "/"

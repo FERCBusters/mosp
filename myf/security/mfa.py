@@ -13,6 +13,7 @@ from fastapi import HTTPException
 from myf import host
 from myf.core.datetime_utils import utc_now_naive as now
 from myf.core.valkey import get_valkey
+from myf.host import hooks
 from myf.host.config import settings
 from myf.host.models import AuditLog, MfaChallenge, MfaCredential, MfaRecoveryCode, User
 from myf.security.encoding import digest, unb64url
@@ -218,7 +219,7 @@ def start(db, user, request, purpose="login"):
     db.commit()
     from fastapi.responses import JSONResponse
 
-    response = JSONResponse({"mfa_required": True, "next": "/mfa.html"})
+    response = JSONResponse({"mfa_required": True, "next": hooks.page("second_factor")})
     response.set_cookie(
         cookie_name(),
         token,

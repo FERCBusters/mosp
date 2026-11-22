@@ -261,7 +261,7 @@ async def _complete_sso_callback(
             )
         raise
 
-    dest = next_url or "/"
+    dest = next_url or hooks.page("home")
     resp = RedirectResponse(dest, status_code=302)
     set_session_cookie(resp, sid)
     set_csrf_cookie(resp, csrf_token)
@@ -347,7 +347,7 @@ def _browser_logout_response(request: Request, db: Session) -> Response:
         )
         resp = JSONResponse({"logout_url": f"{end_session}?{qs}"})
     else:
-        resp = JSONResponse({"logout_url": post_logout or "/login.html"})
+        resp = JSONResponse({"logout_url": post_logout or hooks.page("sign_in")})
 
     from myf.security import mfa
 
@@ -359,12 +359,12 @@ def _browser_logout_response(request: Request, db: Session) -> Response:
 
 @router.get("/v1/auth/logout")
 def browser_logout(request: Request, db: Session = Depends(get_db)) -> Response:
-    return RedirectResponse("/account.html", status_code=303)
+    return RedirectResponse(hooks.page("account"), status_code=303)
 
 
 @router.get("/v1/auth/oidc/logout")
 def oidc_logout(request: Request, db: Session = Depends(get_db)) -> Response:
-    return RedirectResponse("/account.html", status_code=303)
+    return RedirectResponse(hooks.page("account"), status_code=303)
 
 
 @router.post("/v1/auth/oidc/logout")

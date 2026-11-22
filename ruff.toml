@@ -21,3 +21,7 @@ select = [
 [lint.per-file-ignores]
 # The XML parsing boundary itself; applications parse through it.
 "myf/security/xml.py" = ["S314"]
+# Tests build fixture SQL from constants, compare the XML boundary with the
+# standard parser, draw predictable random data and import shared fixtures
+# under the names their tests take as arguments.
+"tests/**" = ["F811", "S311", "S314", "S608"]

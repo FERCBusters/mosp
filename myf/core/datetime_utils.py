@@ -21,6 +21,36 @@ def to_utc_naive(value: datetime) -> datetime:
     return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
+def parse_iso_datetime(value: str, *, require_timezone: bool = False) -> datetime:
+    """An ISO 8601 date and time as naive UTC.
+
+    ``Z`` and offsets convert to UTC; a time without an offset is already UTC
+    unless ``require_timezone`` refuses it. Fractional seconds beyond six
+    digits are truncated. Anything else, a time out of range included, raises
+    ``ValueError``.
+    """
+    try:
+        parsed = datetime.fromisoformat(str(value).strip())
+        if parsed.tzinfo is None:
+            if require_timezone:
+                raise ValueError("The time must include a timezone")
+            return parsed
+        return to_utc_naive(parsed)
+    except OverflowError:
+        raise ValueError("The time is out of range") from None
+
+
+def parse_iso_datetime_or_none(value: object) -> datetime | None:
+    """``parse_iso_datetime`` for best-effort readers: text it cannot read, and
+    anything that is not text, is None."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return parse_iso_datetime(value)
+    except ValueError:
+        return None
+
+
 def utc_from_timestamp_naive(timestamp: float) -> datetime:
     return datetime.fromtimestamp(timestamp, timezone.utc).replace(tzinfo=None)
 

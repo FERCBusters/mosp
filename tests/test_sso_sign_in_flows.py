@@ -1,0 +1,1205 @@
+"""Single sign-on through the assembled application against a fake provider.
+
+The provider is replaced only at the HTTP transport, so TestApp's real code builds
+the authorization request (state, nonce and PKCE), exchanges the code with
+authlib, fetches and caches the JWKS, verifies the signed ID token, consumes
+the browser-bound login state, links the identity to an existing account and
+creates the session. GitHub sign-in runs the same way against fake GitHub
+endpoints. Synthetic keys and accounts only.
+"""
+
+import base64
+import hashlib
+import time
+from datetime import timedelta
+from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
+
+import httpx2
+import pytest
+from fastapi import HTTPException
+from joserfc import jwt
+from joserfc.jwk import RSAKey
+
+from myf.core.datetime_utils import utc_now_naive
+from myf.security import oidc
+from myf.security.auth import cookie_name as session_cookie_name
+from tests.testapp.config import settings
+from tests.testapp.models import (
+    AuditLog,
+    OidcLoginState,
+    User,
+    UserIdentity,
+    UserSsoEmail,
+)
+
+# Imported fixture: the assembled application with an in-memory session store.
+
+ISSUER = "https://idp.example"
+CLIENT_ID = "site-client"
+CLIENT_SECRET = "synthetic-client-secret"
+REDIRECT = "https://app.example/api/v1/auth/sso/oidc/callback"
+LABEL = "Example IdP"
+GITHUB_ISSUER = "https://github.com/login/oauth"
+
+
+@pytest.fixture(scope="module")
+def signing_key():
+    return RSAKey.generate_key(2048, {"kid": "idp-key"})
+
+
+class FakeProvider:
+    """OIDC and GitHub endpoints answering from per-test settings."""
+
+    def __init__(self, key):
+        self.key = key
+        self.requests = []
+        self.token_requests = []
+        self.subject = "idp-subject"
+        self.claims = {}
+        self.nonce = None
+        self.token_response = None
+        self.jwks_response = None
+        self.github_user = {"id": 4242, "login": "octo", "name": "Octo Cat"}
+        self.github_emails = httpx2.Response(200, json=[])
+
+    def id_token(self):
+        now = int(time.time())
+        claims = {
+            "iss": ISSUER,
+            "aud": CLIENT_ID,
+            "sub": self.subject,
+            "iat": now,
+            "exp": now + 300,
+            "nonce": self.nonce,
+            **self.claims,
+        }
+        header = {"alg": "RS256", "kid": self.key.kid}
+        return jwt.encode(header, claims, self.key, algorithms=["RS256"])
+
+    def __call__(self, request):
+        url = str(request.url).split("?")[0]
+        self.requests.append((request.method, url))
+        if url == f"{ISSUER}/jwks":
+            return self.jwks_response or httpx2.Response(
+                200, json={"keys": [self.key.as_dict(private=False)]}
+            )
+        if url in (f"{ISSUER}/token", f"{GITHUB_ISSUER}/access_token"):
+            form = {k: v[0] for k, v in parse_qs(request.content.decode()).items()}
+            self.token_requests.append((form, request.headers.get("authorization")))
+            if self.token_response is not None:
+                return self.token_response
+            if url.startswith(GITHUB_ISSUER):
+                return httpx2.Response(
+                    200, json={"access_token": "gh-access", "token_type": "bearer"}
+                )
+            return httpx2.Response(
+                200,
+                json={
+                    "access_token": "idp-access",
+                    "token_type": "Bearer",
+                    "id_token": self.id_token(),
+                },
+            )
+        if url == "https://api.github.com/user":
+            assert request.headers["authorization"] == "Bearer gh-access"
+            return httpx2.Response(200, json=self.github_user)
+        if url == "https://api.github.com/user/emails":
+            assert request.headers["authorization"] == "Bearer gh-access"
+            return self.github_emails
+        return httpx2.Response(404)
+
+
+@pytest.fixture
+def sso(site, monkeypatch, signing_key):
+    for name, value in {
+        "oidc_enabled": True,
+        "oidc_provider_label": LABEL,
+        "oidc_client_id": CLIENT_ID,
+        "oidc_client_secret": CLIENT_SECRET,
+        "oidc_authorization_endpoint": f"{ISSUER}/authorize",
+        "oidc_token_endpoint": f"{ISSUER}/token",
+        "oidc_jwks_uri": f"{ISSUER}/jwks",
+        "oidc_issuer": ISSUER,
+        "oidc_redirect_uri": REDIRECT,
+        "oidc_allowed_algs": "RS256",
+        "oidc_token_endpoint_auth_method": "client_secret_basic",
+        "oidc_allowed_email_domains": "",
+        "oidc_auto_link_existing": True,
+        "oidc_auto_provision": False,
+        "oidc_allow_insecure_http": False,
+        "github_sso_enabled": False,
+        "github_client_id": "gh-client",
+        "github_client_secret": "gh-secret",
+        "github_redirect_uri": "https://app.example/api/v1/auth/sso/github/callback",
+        "github_allowed_email_domains": "",
+    }.items():
+        monkeypatch.setattr(settings, name, value)
+    provider = FakeProvider(signing_key)
+    real_options = oidc.client_options
+    monkeypatch.setattr(
+        oidc,
+        "client_options",
+        lambda: {**real_options(), "transport": httpx2.MockTransport(provider)},
+    )
+    monkeypatch.setattr(oidc, "_JWKS_CACHE", {})
+    db = site.db
+
+    def account(*, active=True, subject=None, email=None):
+        user = site.user()
+        user.is_active = active
+        if subject:
+            db.add(
+                UserIdentity(
+                    user_id=user.id,
+                    provider="oidc",
+                    issuer=ISSUER,
+                    subject=subject,
+                    email="old@company.example",
+                )
+            )
+        if email:
+            db.add(UserSsoEmail(email=email, user_id=user.id))
+        db.commit()
+        return user
+
+    def start(browser, next_url=None, provider_key="oidc"):
+        params = {} if next_url is None else {"next": next_url}
+        response = browser.get(
+            f"/v1/auth/sso/{provider_key}/start", params=params, follow_redirects=False
+        )
+        return response
+
+    def authorize(browser, next_url=None, provider_key="oidc"):
+        response = start(browser, next_url, provider_key)
+        assert response.status_code == 302, response.text
+        query = {
+            k: v[0]
+            for k, v in parse_qs(urlsplit(response.headers["location"]).query).items()
+        }
+        provider.nonce = query.get("nonce")
+        return response, query
+
+    def finish(browser, state, provider_key="oidc", code="authorization-code"):
+        return browser.get(
+            f"/v1/auth/sso/{provider_key}/callback",
+            params={"code": code, "state": state},
+            follow_redirects=False,
+        )
+
+    def sign_in(browser, next_url=None, provider_key="oidc"):
+        _, query = authorize(browser, next_url, provider_key)
+        return finish(browser, query["state"], provider_key)
+
+    def states():
+        db.expire_all()
+        return db.query(OidcLoginState).count()
+
+    return SimpleNamespace(
+        site=site,
+        db=db,
+        provider=provider,
+        account=account,
+        start=start,
+        authorize=authorize,
+        finish=finish,
+        sign_in=sign_in,
+        states=states,
+    )
+
+
+def _signed_in_as(browser):
+    check = browser.get("/v1/auth/check")
+    return check.headers.get("x-testapp-user") if check.status_code == 204 else None
+
+
+def _sets_session(response):
+    cookies = response.headers.get_list("set-cookie")
+    return any(c.startswith(session_cookie_name() + "=") for c in cookies)
+
+
+# --- The authorization request -------------------------------------------------
+
+
+def test_sign_in_binds_the_browser_uses_pkce_and_returns_to_the_requested_page(sso):
+    user = sso.account(subject="idp-subject")
+    browser = sso.site.client()
+
+    started, query = sso.authorize(browser, "/controls.html?framework=iso")
+
+    location = urlsplit(started.headers["location"])
+    assert (location.scheme, location.netloc, location.path) == (
+        "https",
+        "idp.example",
+        "/authorize",
+    )
+    assert (query["response_type"], query["client_id"], query["redirect_uri"]) == (
+        "code",
+        CLIENT_ID,
+        REDIRECT,
+    )
+    assert "openid" in query["scope"].split()
+    assert query["code_challenge_method"] == "S256"
+    row = sso.db.query(OidcLoginState).filter_by(state=query["state"]).one()
+    assert row.nonce == query["nonce"]
+    assert row.next_url == "/controls.html?framework=iso"
+    remaining = row.expires_at - utc_now_naive()
+    assert timedelta(minutes=9) < remaining <= timedelta(minutes=10)
+    challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(row.code_verifier.encode()).digest()
+    ).rstrip(b"=")
+    assert query["code_challenge"] == challenge.decode()
+    # The state is derived from a secret held only in this browser's cookie.
+    binding = browser.cookies.get(oidc.sso_binding_cookie())
+    assert query["state"] == oidc._browser_state("oidc", binding)
+    cookie = next(
+        c
+        for c in started.headers.get_list("set-cookie")
+        if c.startswith(oidc.sso_binding_cookie() + "=")
+    )
+    assert all(part in cookie for part in ("HttpOnly", "Max-Age=600", "SameSite=lax"))
+    assert started.headers["cache-control"] == "no-store"
+    assert sso.provider.requests == []
+
+    landed = sso.finish(browser, query["state"])
+
+    assert landed.status_code == 302, landed.text
+    assert landed.headers["location"] == "/controls.html?framework=iso"
+    assert landed.headers["cache-control"] == "no-store"
+    ((form, authorization),) = sso.provider.token_requests
+    assert form == {
+        "grant_type": "authorization_code",
+        "code": "authorization-code",
+        "redirect_uri": REDIRECT,
+        "code_verifier": row.code_verifier,
+    }
+    credentials = base64.b64encode(f"{CLIENT_ID}:{CLIENT_SECRET}".encode()).decode()
+    assert authorization == f"Basic {credentials}"
+    assert _signed_in_as(browser) == user.username
+    # The state is single use and the binding cookie is withdrawn.
+    assert sso.states() == 0
+    assert oidc.sso_binding_cookie() not in browser.cookies
+
+
+@pytest.mark.parametrize("binding", [None, "own"], ids=["no-binding", "own-binding"])
+def test_another_browser_cannot_complete_a_sign_in(sso, binding):
+    # Login CSRF: a victim's browser is handed an attacker's callback URL.
+    user = sso.account(subject="idp-subject")
+    initiator = sso.site.client()
+    _, query = sso.authorize(initiator)
+    other = sso.site.client()
+    if binding == "own":
+        sso.authorize(other)
+
+    refused = sso.finish(other, query["state"])
+
+    assert refused.status_code == 400
+    assert refused.json()["detail"] == (
+        "SSO browser verification failed; start sign-in again"
+    )
+    assert not _sets_session(refused) and _signed_in_as(other) is None
+    assert sso.provider.token_requests == []
+    # The initiating browser can still finish its own sign-in. (The fake
+    # provider issues one nonce at a time, so it returns to the initiator's.)
+    sso.provider.nonce = query["nonce"]
+    assert sso.finish(initiator, query["state"]).status_code == 302
+    assert _signed_in_as(initiator) == user.username
+
+
+def test_the_configured_token_endpoint_authentication_is_used(sso, monkeypatch):
+    # Operators choose how the provider expects the client secret.
+    monkeypatch.setattr(
+        settings, "oidc_token_endpoint_auth_method", " Client_Secret_Post "
+    )
+    user = sso.account(subject="idp-subject")
+    browser = sso.site.client()
+
+    assert sso.sign_in(browser).status_code == 302
+    assert _signed_in_as(browser) == user.username
+    ((form, authorization),) = sso.provider.token_requests
+    assert (form["client_id"], form["client_secret"]) == (CLIENT_ID, CLIENT_SECRET)
+    assert authorization is None
+
+
+def test_a_replayed_callback_is_refused_even_with_the_original_binding(sso):
+    sso.account(subject="idp-subject")
+    browser = sso.site.client()
+    _, query = sso.authorize(browser)
+    binding = browser.cookies.get(oidc.sso_binding_cookie())
+    assert sso.finish(browser, query["state"]).status_code == 302
+
+    replayer = sso.site.client()
+    replayer.cookies.set(oidc.sso_binding_cookie(), binding, domain="app.example")
+    replay = sso.finish(replayer, query["state"])
+
+    assert replay.status_code == 400
+    assert replay.json()["detail"] == "SSO state missing or expired"
+    assert not _sets_session(replay)
+    assert len(sso.provider.token_requests) == 1
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "//attacker.example/landing",
+        "https://attacker.example/",
+        "/\\attacker.example",
+        "\\\\attacker.example",
+        "/safe\r\nSet-Cookie: injected=1",
+        "javascript:alert(1)",
+        "controls.html",
+        "/redirect?to=https://attacker.example",
+        # Dot segments, which browsers resolve to //attacker.example.
+        "/.//attacker.example",
+        "/./attacker.example",
+        "/a/..//attacker.example",
+        "/..//attacker.example",
+        "/a/.",
+        "/a/..",
+        "/%2e//attacker.example",
+        "/%2E%2E//attacker.example",
+        "/x/%2e%2e/%2fattacker.example",
+        "/%2f/attacker.example",
+        "/%5Cattacker.example",
+    ],
+)
+def test_sign_in_never_lands_off_site(sso, target):
+    sso.account(subject="idp-subject")
+    browser = sso.site.client()
+    _, query = sso.authorize(browser, target)
+    row = sso.db.query(OidcLoginState).filter_by(state=query["state"]).one()
+
+    landed = sso.finish(browser, query["state"])
+
+    # The destination is discarded when sign-in starts, and the user lands on
+    # the home page.
+    assert row.next_url is None
+    assert landed.status_code == 302, landed.text
+    assert landed.headers["location"] == "/"
+    assert "injected" not in " ".join(landed.headers.get_list("set-cookie"))
+
+
+def test_a_tampered_stored_destination_is_checked_again_at_the_callback(sso):
+    sso.account(subject="idp-subject")
+    browser = sso.site.client()
+    _, query = sso.authorize(browser, "/controls.html")
+    row = sso.db.query(OidcLoginState).filter_by(state=query["state"]).one()
+    row.next_url = "//attacker.example/landing"
+    sso.db.commit()
+
+    landed = sso.finish(browser, query["state"])
+
+    assert landed.status_code == 302 and landed.headers["location"] == "/"
+
+
+@pytest.mark.parametrize(
+    "target",
+    ["/controls.html?framework=iso", "/event.html?id=1#notes", "/search?q=a/../b"],
+)
+def test_ordinary_destinations_are_kept(sso, target):
+    sso.account(subject="idp-subject")
+    browser = sso.site.client()
+
+    landed = sso.sign_in(browser, target)
+
+    assert landed.status_code == 302 and landed.headers["location"] == target
+
+
+# --- Linking the identity to an account ---------------------------------------
+
+
+def test_an_existing_identity_signs_in_and_refreshes_its_profile(sso):
+    user = sso.account(subject="idp-subject")
+    sso.provider.claims = {
+        "email": "Ada@Company.example",
+        "preferred_username": "ada",
+        "name": "Ada Lovelace",
+    }
+    browser = sso.site.client()
+
+    assert sso.sign_in(browser).status_code == 302
+    assert _signed_in_as(browser) == user.username
+    sso.db.expire_all()
+    identity = sso.db.query(UserIdentity).filter_by(subject="idp-subject").one()
+    assert (identity.email, identity.preferred_username, identity.display_name) == (
+        "ada@company.example",
+        "ada",
+        "Ada Lovelace",
+    )
+    assert sso.db.get(User, user.id).last_login_at is not None
+
+
+def test_a_deactivated_account_cannot_sign_in_with_its_linked_identity(sso):
+    sso.account(subject="idp-subject", active=False)
+    browser = sso.site.client()
+
+    refused = sso.sign_in(browser)
+
+    assert refused.status_code == 403
+    assert refused.json()["detail"] == "User is inactive"
+    assert not _sets_session(refused) and _signed_in_as(browser) is None
+    assert sso.states() == 0
+
+
+def test_a_first_sign_in_links_only_a_mailbox_both_sides_verified(sso):
+    user = sso.account(email="ada@company.example")
+    sso.provider.subject = "new-subject"
+    browser = sso.site.client()
+
+    # The provider does not vouch for the address: no link.
+    sso.provider.claims = {"email": "ada@company.example", "email_verified": False}
+    refused = sso.sign_in(browser)
+    assert refused.status_code == 403
+    assert (
+        refused.json()["detail"]
+        == "No active TestApp account matches this SSO identity"
+    )
+    assert sso.db.query(UserIdentity).count() == 0
+
+    sso.provider.claims = {"email": "ada@company.example", "email_verified": True}
+    assert sso.sign_in(browser).status_code == 302
+    assert _signed_in_as(browser) == user.username
+    identity = sso.db.query(UserIdentity).one()
+    assert (identity.user_id, identity.issuer, identity.subject) == (
+        user.id,
+        ISSUER,
+        "new-subject",
+    )
+
+
+def test_an_address_that_only_lower_cases_to_a_proved_one_is_not_linked(sso):
+    # Addresses are compared without regard to the case of their ASCII
+    # letters. Python's lower() also turns U+212A KELVIN SIGN into "k", so a
+    # provider-verified address written with it would have matched a
+    # different, plain address that someone else proved in TestApp.
+    user = sso.account(email="kate@company.example")
+    sso.provider.subject = "new-subject"
+    browser = sso.site.client()
+    assert "\u212aate".lower() == "kate"
+
+    sso.provider.claims = {
+        "email": "\u212aate@company.example",
+        "email_verified": True,
+    }
+    refused = sso.sign_in(browser)
+
+    assert refused.status_code == 403
+    assert (
+        refused.json()["detail"]
+        == "No active TestApp account matches this SSO identity"
+    )
+    assert sso.db.query(UserIdentity).count() == 0
+    # The same mailbox in another ASCII case is still the proved address.
+    sso.provider.claims = {"email": "Kate@Company.Example", "email_verified": True}
+    assert sso.sign_in(browser).status_code == 302
+    assert _signed_in_as(browser) == user.username
+
+
+def test_a_deactivated_account_is_never_linked_by_email(sso):
+    sso.account(email="ada@company.example", active=False)
+    sso.provider.subject = "new-subject"
+    sso.provider.claims = {"email": "ada@company.example", "email_verified": True}
+
+    refused = sso.sign_in(sso.site.client())
+
+    assert refused.status_code == 403
+    assert (
+        refused.json()["detail"]
+        == "No active TestApp account matches this SSO identity"
+    )
+    assert sso.db.query(UserIdentity).count() == 0
+
+
+def test_the_email_domain_allowlist_applies_before_linking(sso, monkeypatch):
+    monkeypatch.setattr(settings, "oidc_allowed_email_domains", "Company.example")
+    allowed = sso.account(email="ada@company.example")
+    sso.account(email="eve@partner.example")
+    sso.provider.subject = "eve-subject"
+    sso.provider.claims = {"email": "eve@partner.example", "email_verified": True}
+
+    refused = sso.sign_in(sso.site.client())
+    assert refused.status_code == 403
+    assert refused.json()["detail"] == "Email domain is not allowed"
+    assert sso.db.query(UserIdentity).count() == 0
+
+    sso.provider.subject = "ada-subject"
+    sso.provider.claims = {"email": "ada@company.example", "email_verified": True}
+    browser = sso.site.client()
+    assert sso.sign_in(browser).status_code == 302
+    assert _signed_in_as(browser) == allowed.username
+
+
+@pytest.mark.parametrize(
+    "claims",
+    [
+        {"email": "ada@partner.example", "email_verified": True},
+        {"email": "ada@company.example", "email_verified": False},
+        {},
+    ],
+    ids=["other-domain", "unverified", "no-email"],
+)
+def test_the_email_domain_allowlist_applies_to_every_sign_in(sso, monkeypatch, claims):
+    # An identity linked while its address was allowed stops signing in once
+    # the address leaves the allowed domains or the list is tightened.
+    user = sso.account(subject="idp-subject")
+    sso.provider.claims = {"email": "ada@company.example", "email_verified": True}
+    assert sso.sign_in(sso.site.client()).status_code == 302
+    monkeypatch.setattr(settings, "oidc_allowed_email_domains", "Company.example")
+    assert sso.sign_in(sso.site.client()).status_code == 302
+
+    sso.provider.claims = claims
+    browser = sso.site.client()
+    refused = sso.sign_in(browser)
+
+    assert refused.status_code == 403
+    assert refused.json()["detail"] == "Email domain is not allowed"
+    assert not _sets_session(refused) and _signed_in_as(browser) is None
+    # The refused identity keeps its last accepted profile.
+    sso.db.expire_all()
+    assert sso.db.query(UserIdentity).one().email == "ada@company.example"
+    row = _sign_in_rows(sso)[-1]
+    assert row == (user.username, {"method": ["oidc"], "outcome": ["failed"]})
+
+
+def test_a_github_sign_in_rechecks_the_allowed_domains(github, monkeypatch):
+    user = github.account(email="ada@company.example")
+    github.provider.github_emails = httpx2.Response(
+        200, json=[{"email": "ada@company.example", "primary": True, "verified": True}]
+    )
+    browser, _, landed = _github_sign_in(github)
+    assert landed.status_code == 302 and _signed_in_as(browser) == user.username
+
+    monkeypatch.setattr(settings, "github_allowed_email_domains", "corp.example")
+    browser, _, refused = _github_sign_in(github)
+
+    assert refused.status_code == 403
+    assert refused.json()["detail"] == "Email domain is not allowed"
+    assert _signed_in_as(browser) is None
+
+
+# --- Sign-in audit and issuance --------------------------------------------------
+
+
+def _sign_in_rows(sso):
+    sso.db.expire_all()
+    return [
+        (row.username, parse_qs(row.query_string or ""))
+        for row in sso.db.query(AuditLog)
+        .filter_by(path="/action/sign-in")
+        .order_by(AuditLog.ts)
+        .all()
+    ]
+
+
+def test_sso_sign_in_attempts_are_audited(sso):
+    user = sso.account(subject="idp-subject")
+    assert sso.sign_in(sso.site.client()).status_code == 302
+    sso.provider.subject = "unlinked-subject"
+    assert sso.sign_in(sso.site.client()).status_code == 403
+    user.is_active = False
+    sso.db.commit()
+    sso.provider.subject = "idp-subject"
+    assert sso.sign_in(sso.site.client()).status_code == 403
+    # A callback that never consumed a sign-in this browser began is no attempt.
+    _, query = sso.authorize(sso.site.client())
+    refused = sso.finish(sso.site.client(), query["state"])
+    assert (refused.status_code, refused.json()) == (
+        400,
+        {"detail": "SSO browser verification failed; start sign-in again"},
+    )
+
+    assert _sign_in_rows(sso) == [
+        (user.username, {"method": ["oidc"], "outcome": ["signed-in"]}),
+        (None, {"method": ["oidc"], "outcome": ["failed"]}),
+        (user.username, {"method": ["oidc"], "outcome": ["failed"]}),
+    ]
+
+
+def test_a_deactivation_during_sign_in_issues_no_session(sso, monkeypatch):
+    # The account is deactivated after its identity is checked and before the
+    # session is issued. A session carrying the post-deactivation version
+    # would become valid again when the account is reactivated.
+    from tests.testapp.models import User as Account
+
+    user = sso.account(subject="idp-subject")
+    resolve = oidc._get_or_create_user_for_identity
+
+    def deactivated_meanwhile(db, **kwargs):
+        resolved = resolve(db, **kwargs)
+        db.query(Account).filter(Account.id == resolved.id).update(
+            {
+                Account.is_active: False,
+                Account.session_version: Account.session_version + 1,
+            },
+            synchronize_session=False,
+        )
+        db.commit()
+        return resolved
+
+    monkeypatch.setattr(oidc, "_get_or_create_user_for_identity", deactivated_meanwhile)
+    browser = sso.site.client()
+
+    refused = sso.sign_in(browser)
+
+    assert refused.status_code == 403
+    assert refused.json()["detail"] == "User is inactive"
+    assert not _sets_session(refused)
+    sso.db.expire_all()
+    sso.db.get(Account, user.id).is_active = True
+    sso.db.commit()
+    assert _signed_in_as(browser) is None
+    assert _sign_in_rows(sso)[-1] == (
+        user.username,
+        {"method": ["oidc"], "outcome": ["failed"]},
+    )
+
+
+# --- Provider failures ---------------------------------------------------------
+
+
+def test_provider_error_details_never_reach_the_browser(sso):
+    sso.account(subject="idp-subject")
+    sso.provider.token_response = httpx2.Response(
+        400,
+        json={
+            "error": "invalid_grant",
+            "error_description": f"code rejected for client_secret={CLIENT_SECRET}",
+        },
+    )
+    browser = sso.site.client()
+
+    refused = sso.sign_in(browser)
+
+    assert refused.status_code == 400
+    assert refused.json()["detail"] == (
+        "SSO verification failed; start sign-in again or contact an administrator"
+    )
+    assert CLIENT_SECRET not in refused.text and "invalid_grant" not in refused.text
+    assert not _sets_session(refused)
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        {"access_token": "idp-access", "token_type": "Bearer"},
+        {"access_token": "idp-access", "token_type": "Bearer", "id_token": ""},
+    ],
+    ids=["absent", "empty"],
+)
+def test_a_token_response_without_an_id_token_cannot_sign_in(sso, token):
+    sso.account(subject="idp-subject")
+    sso.provider.token_response = httpx2.Response(200, json=token)
+    browser = sso.site.client()
+    _, query = sso.authorize(browser)
+
+    refused = sso.finish(browser, query["state"])
+
+    assert (refused.status_code, refused.json()["detail"]) == (
+        400,
+        "OIDC token response missing id_token",
+    )
+    assert not _sets_session(refused) and _signed_in_as(browser) is None
+    # The login state is spent, so the callback cannot be replayed.
+    sso.provider.token_response = None
+    assert sso.finish(browser, query["state"]).json()["detail"] == (
+        "SSO state missing or expired"
+    )
+
+
+def test_an_id_token_with_a_blank_subject_cannot_sign_in(sso):
+    sso.account(email="ada@company.example")
+    sso.provider.subject = "   "
+    sso.provider.claims = {"email": "ada@company.example", "email_verified": True}
+    browser = sso.site.client()
+
+    refused = sso.sign_in(browser)
+
+    assert (refused.status_code, refused.json()["detail"]) == (
+        400,
+        "OIDC claims missing sub",
+    )
+    assert not _sets_session(refused) and _signed_in_as(browser) is None
+    assert sso.db.query(UserIdentity).count() == 0
+
+
+def _key_set_reads(sso):
+    return sso.provider.requests.count(("GET", f"{ISSUER}/jwks"))
+
+
+def test_a_rotated_signing_key_is_read_once_the_cached_set_is_a_minute_old(sso):
+    """A provider that rotates its key signs with one the cached set lacks.
+    The set is read again, at most once a minute, so sign-in resumes without
+    waiting out the hour the set is otherwise kept."""
+    sso.account(subject="idp-subject")
+    assert sso.sign_in(sso.site.client()).status_code == 302
+    assert _key_set_reads(sso) == 1
+    sso.provider.key = RSAKey.generate_key(2048, {"kid": "rotated-key"})
+
+    # Within the minute the cached set stands: tokens naming unknown keys
+    # cannot make TestApp read the provider on every callback.
+    for _ in range(3):
+        refused = sso.sign_in(sso.site.client())
+        assert refused.status_code == 400 and not _sets_session(refused)
+    assert _key_set_reads(sso) == 1
+
+    keys, expires = oidc._JWKS_CACHE[f"{ISSUER}/jwks"]
+    oidc._JWKS_CACHE[f"{ISSUER}/jwks"] = (keys, expires - timedelta(minutes=2))
+    assert sso.sign_in(sso.site.client()).status_code == 302
+    assert _key_set_reads(sso) == 2
+    # The new set holds the key, so it is kept as any other.
+    assert sso.sign_in(sso.site.client()).status_code == 302
+    assert _key_set_reads(sso) == 2
+
+
+def test_only_a_named_key_missing_from_the_cached_set_reads_it_again(sso):
+    sso.account(subject="idp-subject")
+    assert sso.sign_in(sso.site.client()).status_code == 302
+    keys, expires = oidc._JWKS_CACHE[f"{ISSUER}/jwks"]
+    oidc._JWKS_CACHE[f"{ISSUER}/jwks"] = (keys, expires - timedelta(minutes=2))
+    genuine = sso.provider.key
+
+    # A token signed by the cached key, however old the set, reads nothing.
+    assert sso.sign_in(sso.site.client()).status_code == 302
+    # Nor does a token that names no key, or is no token at all.
+    for token in ("not-a-token", "e30.e30.", "W10.e30.", "eyJraWQiOiA3fQ.e30."):
+        sso.provider.token_response = httpx2.Response(
+            200,
+            json={"access_token": "a", "token_type": "Bearer", "id_token": token},
+        )
+        refused = sso.sign_in(sso.site.client())
+        assert refused.status_code == 400 and not _sets_session(refused)
+    assert _key_set_reads(sso) == 1
+
+    # A forger's key is read for once, found absent from the provider's own
+    # set, and refused.
+    sso.provider.token_response = None
+    sso.provider.key = RSAKey.generate_key(2048, {"kid": "forged-key"})
+    sso.provider.jwks_response = httpx2.Response(
+        200, json={"keys": [genuine.as_dict(private=False)]}
+    )
+    refused = sso.sign_in(sso.site.client())
+    assert refused.status_code == 400 and not _sets_session(refused)
+    assert _key_set_reads(sso) == 2
+
+
+def test_a_key_set_that_lists_no_keys_holds_none(sso):
+    assert oidc._holds_key({"keys": "not-a-list"}, "idp-key") is False
+    assert oidc._holds_key({"keys": ["not-a-key", {"kid": "idp-key"}]}, "idp-key")
+    assert oidc._holds_key({"keys": []}, None) is True
+
+
+def test_an_id_token_from_another_key_cannot_sign_in(sso):
+    sso.account(subject="idp-subject")
+    forger = RSAKey.generate_key(2048, {"kid": "idp-key"})
+    sso.provider.key, genuine = forger, sso.provider.key
+    sso.provider.jwks_response = httpx2.Response(
+        200, json={"keys": [genuine.as_dict(private=False)]}
+    )
+
+    refused = sso.sign_in(sso.site.client())
+
+    assert refused.status_code == 400
+    assert not _sets_session(refused)
+
+
+@pytest.mark.parametrize(
+    "response,status",
+    [
+        (httpx2.Response(503, json={"error": "unavailable"}), 400),
+        (httpx2.Response(200, json={"not": "a key set"}), 500),
+    ],
+    ids=["provider-error", "malformed-key-set"],
+)
+def test_an_unusable_key_set_fails_closed_and_is_not_cached(sso, response, status):
+    sso.account(subject="idp-subject")
+    sso.provider.jwks_response = response
+
+    refused = sso.sign_in(sso.site.client())
+
+    assert refused.status_code == status
+    assert not _sets_session(refused)
+    assert oidc._JWKS_CACHE == {}
+    # Once the provider recovers, sign-in works without waiting for a cache.
+    sso.provider.jwks_response = None
+    assert sso.sign_in(sso.site.client()).status_code == 302
+
+
+def test_the_key_set_is_fetched_once_an_hour(sso, monkeypatch):
+    sso.account(subject="idp-subject")
+
+    def jwks_fetches():
+        return sum(1 for _, url in sso.provider.requests if url.endswith("/jwks"))
+
+    assert sso.sign_in(sso.site.client()).status_code == 302
+    assert sso.sign_in(sso.site.client()).status_code == 302
+    assert jwks_fetches() == 1
+
+    later = oidc._now() + timedelta(hours=1, seconds=1)
+    monkeypatch.setattr(oidc, "_now", lambda: later)
+    assert sso.sign_in(sso.site.client()).status_code == 302
+    assert jwks_fetches() == 2
+
+
+# --- Provider configuration ----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "changes,status,detail",
+    [
+        ({"oidc_enabled": False}, 404, "SSO provider disabled"),
+        (
+            {"oidc_auto_provision": True},
+            500,
+            "SSO auto-provisioning is not supported; TestApp only allows existing "
+            "active users",
+        ),
+        (
+            {"oidc_client_secret": "", "oidc_jwks_uri": "", "oidc_issuer": ""},
+            500,
+            f"{LABEL} SSO is enabled but required settings are missing: "
+            "TESTAPP_OIDC_CLIENT_SECRET, TESTAPP_OIDC_JWKS_URI, TESTAPP_OIDC_ISSUER",
+        ),
+        (
+            {
+                "oidc_client_id": "",
+                "oidc_authorization_endpoint": "",
+                "oidc_token_endpoint": "",
+            },
+            500,
+            f"{LABEL} SSO is enabled but required settings are missing: "
+            "TESTAPP_OIDC_CLIENT_ID, TESTAPP_OIDC_AUTHORIZATION_ENDPOINT, "
+            "TESTAPP_OIDC_TOKEN_ENDPOINT",
+        ),
+        (
+            # A setting of separators alone names no issuer.
+            {"oidc_issuer": " , "},
+            500,
+            f"{LABEL} SSO is enabled but required settings are missing: "
+            "TESTAPP_OIDC_ISSUER",
+        ),
+        (
+            # TestApp never derives a callback address from the request.
+            {"oidc_redirect_uri": ""},
+            500,
+            f"{LABEL} SSO is enabled but required settings are missing: "
+            "TESTAPP_OIDC_REDIRECT_URI",
+        ),
+        (
+            {
+                "oidc_redirect_uri": "https://elsewhere.example/api/v1/auth/sso/oidc/callback"
+            },
+            500,
+            f"{LABEL} redirect URI must be on TESTAPP_PUBLIC_BASE_URL",
+        ),
+        (
+            # The public origin followed by more host name is another host.
+            {"oidc_redirect_uri": "https://app.example.attacker.example/callback"},
+            500,
+            f"{LABEL} redirect URI must be on TESTAPP_PUBLIC_BASE_URL",
+        ),
+        (
+            {"oidc_redirect_uri": "http://app.example/api/v1/auth/sso/oidc/callback"},
+            500,
+            f"{LABEL} redirect URI must be on TESTAPP_PUBLIC_BASE_URL",
+        ),
+        (
+            {"oidc_token_endpoint": "http://idp.example/token"},
+            500,
+            f"{LABEL} token endpoint must use HTTPS",
+        ),
+        (
+            {
+                "oidc_jwks_uri": "ftp://idp.example/jwks",
+                "oidc_allow_insecure_http": True,
+            },
+            500,
+            f"{LABEL} JWKS URI must use HTTPS",
+        ),
+        (
+            # A public-client method would send no client secret at all.
+            {"oidc_token_endpoint_auth_method": "none"},
+            500,
+            f"{LABEL} token endpoint authentication must be client_secret_basic "
+            "or client_secret_post",
+        ),
+    ],
+    ids=[
+        "disabled",
+        "auto-provision",
+        "incomplete",
+        "no-client-or-endpoints",
+        "separators-for-an-issuer",
+        "no-redirect-uri",
+        "redirect-elsewhere",
+        "redirect-on-a-longer-host",
+        "redirect-over-http",
+        "plain-http",
+        "other-scheme",
+        "no-client-authentication",
+    ],
+)
+def test_misconfigured_sign_in_fails_closed_before_contacting_the_provider(
+    sso, monkeypatch, changes, status, detail
+):
+    for name, value in changes.items():
+        monkeypatch.setattr(settings, name, value)
+    browser = sso.site.client()
+
+    response = sso.start(browser)
+
+    assert response.status_code == status
+    assert response.json()["detail"] == detail
+    assert sso.states() == 0 and sso.provider.requests == []
+    methods = browser.get("/v1/auth/methods").json()
+    assert (
+        methods["oidc_enabled"],
+        methods["sso_enabled"],
+        methods["sso_providers"],
+    ) == (False, False, [])
+
+
+def test_only_working_providers_are_offered_on_the_sign_in_page(sso, monkeypatch):
+    methods = sso.site.client().get("/v1/auth/methods").json()
+    assert methods["sso_providers"] == [
+        {
+            "key": "oidc",
+            "label": LABEL,
+            "kind": "oidc",
+            "start_url": "/api/v1/auth/sso/oidc/start",
+        }
+    ]
+    assert methods["sso_enabled"] is True
+    # The sign-in page reads the provider list. The hosted demo portal reads
+    # oidc_enabled before it offers a demo.
+    assert set(methods) == {
+        "local_enabled",
+        "ldap_enabled",
+        "remote_user_enabled",
+        "oidc_enabled",
+        "sso_enabled",
+        "sso_providers",
+    }
+    assert methods["oidc_enabled"] is True
+
+    # Plain HTTP is accepted only with the explicit development setting.
+    monkeypatch.setattr(settings, "oidc_token_endpoint", "http://idp.example/token")
+    assert sso.site.client().get("/v1/auth/methods").json()["sso_providers"] == []
+    monkeypatch.setattr(settings, "oidc_allow_insecure_http", True)
+    offered = sso.site.client().get("/v1/auth/methods").json()["sso_providers"]
+    assert [item["key"] for item in offered] == ["oidc"]
+
+
+# --- GitHub --------------------------------------------------------------------
+
+
+@pytest.fixture
+def github(sso, monkeypatch):
+    monkeypatch.setattr(settings, "github_sso_enabled", True)
+    return sso
+
+
+def _github_sign_in(sso, browser=None):
+    browser = browser or sso.site.client()
+    _, query = sso.authorize(browser, provider_key="github")
+    return browser, query, sso.finish(browser, query["state"], "github")
+
+
+def test_github_sign_in_links_a_primary_verified_address(github):
+    user = github.account(email="ada@company.example")
+    github.provider.github_emails = httpx2.Response(
+        200,
+        json=[
+            {"email": "ada@company.example", "primary": True, "verified": True},
+            {"email": "old@elsewhere.example", "primary": False, "verified": True},
+        ],
+    )
+
+    browser, query, landed = _github_sign_in(github)
+
+    assert landed.status_code == 302, landed.text
+    assert _signed_in_as(browser) == user.username
+    assert (
+        query["redirect_uri"] == "https://app.example/api/v1/auth/sso/github/callback"
+    )
+    assert "nonce" not in query
+    ((form, _),) = github.provider.token_requests
+    # GitHub receives its client credentials in the form, with the PKCE verifier.
+    assert (form["client_id"], form["client_secret"]) == ("gh-client", "gh-secret")
+    assert form["code_verifier"]
+    identity = github.db.query(UserIdentity).one()
+    assert (identity.provider, identity.issuer, identity.subject) == (
+        "github",
+        GITHUB_ISSUER,
+        "4242",
+    )
+
+
+@pytest.mark.parametrize(
+    "emails",
+    [
+        # The address is listed but not verified by GitHub.
+        httpx2.Response(
+            200,
+            json=[{"email": "ada@company.example", "primary": True, "verified": False}],
+        ),
+        # Verified, but not the account's primary address.
+        httpx2.Response(
+            200,
+            json=[
+                {"email": "ada@company.example", "primary": False, "verified": True},
+                {"email": "eve@attacker.example", "primary": True, "verified": True},
+            ],
+        ),
+        # GitHub withholds the address list.
+        httpx2.Response(403, json={"message": "Resource not accessible"}),
+    ],
+    ids=["unverified", "not-primary", "list-withheld"],
+)
+def test_a_public_github_profile_address_cannot_claim_an_account(github, emails):
+    # Anyone can put another person's address on a public GitHub profile.
+    github.account(email="ada@company.example")
+    github.provider.github_user = {
+        "id": 666,
+        "login": "eve",
+        "email": "ada@company.example",
+    }
+    github.provider.github_emails = emails
+
+    browser, _, refused = _github_sign_in(github)
+
+    assert refused.status_code == 403
+    assert (
+        refused.json()["detail"]
+        == "No active TestApp account matches this SSO identity"
+    )
+    assert github.db.query(UserIdentity).count() == 0
+    assert _signed_in_as(browser) is None
+
+
+def test_a_github_token_response_without_an_access_token_cannot_sign_in(github):
+    github.account(email="ada@company.example")
+    github.provider.token_response = httpx2.Response(200, json={"token_type": "bearer"})
+
+    browser, _, refused = _github_sign_in(github)
+
+    assert (refused.status_code, refused.json()["detail"]) == (
+        400,
+        "GitHub token response missing access_token",
+    )
+    assert not _sets_session(refused) and _signed_in_as(browser) is None
+    # TestApp asks GitHub for no profile without a token to present.
+    assert [url for _, url in github.provider.requests if "api.github.com" in url] == []
+
+
+@pytest.mark.parametrize(
+    "user_response",
+    [
+        httpx2.Response(200, json={"login": "octo"}),
+        httpx2.Response(200, json={"id": 4242}),
+        httpx2.Response(200, json=["not", "an", "object"]),
+        httpx2.Response(500, json={"message": "Server error"}),
+    ],
+    ids=["no-id", "no-login", "not-an-object", "server-error"],
+)
+def test_incomplete_github_profiles_cannot_sign_in(github, monkeypatch, user_response):
+    github.account(email="ada@company.example")
+    original = github.provider.__call__
+
+    def provider(request):
+        if str(request.url) == "https://api.github.com/user":
+            github.provider.requests.append((request.method, str(request.url)))
+            return user_response
+        return original(request)
+
+    monkeypatch.setattr(
+        oidc,
+        "client_options",
+        lambda: {"timeout": 10.0, "transport": httpx2.MockTransport(provider)},
+    )
+
+    browser, _, refused = _github_sign_in(github)
+
+    assert refused.status_code == 400
+    assert not _sets_session(refused) and _signed_in_as(browser) is None
+    assert github.db.query(UserIdentity).count() == 0
+
+
+def test_without_automatic_linking_an_unlinked_identity_is_refused(sso, monkeypatch):
+    monkeypatch.setattr(settings, "oidc_auto_link_existing", False)
+    sso.account(email="ada@company.example")
+    sso.provider.claims = {"email": "ada@company.example", "email_verified": True}
+
+    refused = sso.sign_in(sso.site.client())
+
+    assert (refused.status_code, refused.json()) == (
+        403,
+        {"detail": "No local account linked to this identity"},
+    )
+
+
+def test_the_oidc_addresses_serve_the_oidc_provider(sso):
+    browser = sso.site.client()
+    started = browser.get("/v1/auth/oidc/start", follow_redirects=False)
+    assert started.status_code == 302
+    query = {
+        k: v[0]
+        for k, v in parse_qs(urlsplit(started.headers["location"]).query).items()
+    }
+    sso.provider.nonce = query["nonce"]
+    sso.account(subject="idp-subject")
+    landed = browser.get(
+        "/v1/auth/oidc/callback",
+        params={"code": "authorization-code", "state": query["state"]},
+        follow_redirects=False,
+    )
+    assert landed.status_code == 302, landed.text
+    assert _signed_in_as(browser) is not None
+
+
+def test_an_unknown_provider_has_no_configuration(sso):
+    assert oidc.get_sso_provider("nobody") is None
+    assert oidc.get_sso_provider(None).key == "oidc"
+
+
+def test_sign_in_starts_are_limited_for_each_address(sso, monkeypatch):
+    monkeypatch.setattr(oidc, "_sso_start_allowed", lambda request: (False, 42))
+    refused = sso.start(sso.site.client())
+    assert (refused.status_code, refused.json()) == (
+        429,
+        {"detail": "Too many sign-in attempts"},
+    )
+    assert refused.headers["retry-after"] == "42"
+
+
+def test_the_application_may_refuse_an_identity_before_it_reaches_an_account(sso, hook):
+    seen = []
+
+    def refuse(provider_key, issuer, subject):
+        seen.append((provider_key, issuer, subject))
+        raise HTTPException(403, "This workspace admits its owner only")
+
+    hook(sso_identity_allowed=refuse)
+    sso.account(subject="idp-subject")
+
+    refused = sso.sign_in(sso.site.client())
+
+    assert (refused.status_code, refused.json()) == (
+        403,
+        {"detail": "This workspace admits its owner only"},
+    )
+    assert seen == [("oidc", ISSUER, "idp-subject")]
+
+
+def test_a_single_sign_on_replaces_the_session_the_browser_arrived_with(sso):
+    user = sso.account(subject="idp-subject")
+    browser = sso.site.client(sso.site.user())
+    arrived = browser.cookies.get(session_cookie_name())
+
+    assert sso.sign_in(browser).status_code == 302
+
+    assert browser.cookies.get(session_cookie_name()) != arrived
+    assert _signed_in_as(browser) == user.username
+    sso.site.db.expire_all()
+    stale = sso.site.client()
+    stale.cookies.set(session_cookie_name(), arrived)
+    assert stale.get("/v1/auth/check").status_code == 401

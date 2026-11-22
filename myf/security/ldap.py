@@ -85,7 +85,7 @@ def _entry_allowed(issuer, subject, *, recognised: bool) -> bool:
     """Count a password tried against the directory entry a search matched.
 
     Directories match a name regardless of case, width and spacing beyond
-    The application's own comparison, so every spelling that reaches one entry shares
+    the application's own comparison, so every spelling that reaches one entry shares
     one throttle of the sign-in policy's shape (myf/security/sign_in_throttle.py).
     A browser recognised for the typed name skips it, as it skips the name's.
     A held attempt is answered as a wrong password, so it cannot show that a

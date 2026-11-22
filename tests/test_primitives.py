@@ -101,3 +101,26 @@ def test_identifiers_and_mailboxes_have_one_spelling():
     assert try_uuid("{8b0c3f8e-5d2a-4c61-9a57-2f0b7e3d1c44}") is None
     assert single_mailbox("Someone <a@example.com>") is None
     assert single_mailbox(" a@example.com ") == "a@example.com"
+
+
+def test_iso_times_have_one_reading():
+    from datetime import datetime
+
+    from myf.core.datetime_utils import parse_iso_datetime, parse_iso_datetime_or_none
+
+    assert parse_iso_datetime("2026-01-07T00:09:08Z") == datetime(2026, 1, 7, 0, 9, 8)
+    assert parse_iso_datetime("2026-01-01T10:00+10:00") == datetime(2026, 1, 1)
+    assert parse_iso_datetime(" 2026-01-01T00:00:00.1234567Z ") == datetime(
+        2026, 1, 1, 0, 0, 0, 123456
+    )
+    assert parse_iso_datetime("2026-01-01 10:00") == datetime(2026, 1, 1, 10)
+    with pytest.raises(ValueError, match="timezone"):
+        parse_iso_datetime("2026-01-01T10:00", require_timezone=True)
+    with pytest.raises(ValueError, match="out of range"):
+        parse_iso_datetime("0001-01-01T00:00+01:00")
+    with pytest.raises(ValueError):
+        parse_iso_datetime("yesterday")
+    assert parse_iso_datetime_or_none("yesterday") is None
+    assert parse_iso_datetime_or_none(12) is None
+    assert parse_iso_datetime_or_none("  ") is None
+    assert parse_iso_datetime_or_none("2026-01-01T00:00Z") == datetime(2026, 1, 1)

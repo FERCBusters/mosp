@@ -1,11 +1,11 @@
-"""Routers for myf's routes, built with the application's route class."""
+"""Routers built with myf's route class (``myf.api.errors.DomainRoute``)."""
 
 from fastapi import APIRouter
 
-from myf.host import hooks
+from myf.api.errors import DomainRoute
 
 
 class Router(APIRouter):
     def __init__(self, *args, **kwargs):
-        kwargs.setdefault("route_class", hooks.route_class())
+        kwargs.setdefault("route_class", DomainRoute)
         super().__init__(*args, **kwargs)
