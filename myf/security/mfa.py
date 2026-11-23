@@ -212,9 +212,15 @@ def operator_reset(db, user) -> None:
 
 
 def start(db, user, request, purpose="login"):
+    from myf.security.auth import credential_generation
+
     check_origin(request)
+    # A password sign-in proved one generation of the account's credentials
+    # (auth.credential_generation), read before the password was checked; a
+    # later read could already show a change committed meanwhile.
+    proven = user.verified_credential
+    password_before_lock = user.password_hash if proven is None else proven[0]
     # Serialize enrolment/reset/login state changes on the authoritative user row.
-    password_before_lock = user.password_hash
     user = (
         db.query(User)
         .filter(User.id == user.id)
@@ -222,7 +228,11 @@ def start(db, user, request, purpose="login"):
         .with_for_update()
         .one()
     )
-    if user.password_hash != password_before_lock or not user.is_active:
+    if (
+        user.password_hash != password_before_lock
+        or (proven is not None and credential_generation(user) != proven)
+        or not user.is_active
+    ):
         raise HTTPException(401, "Account changed; sign in again")
     token = secrets.token_urlsafe(32)
     # Bound outstanding challenges per account and invalidate older browser flows.

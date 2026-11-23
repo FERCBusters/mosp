@@ -4,8 +4,10 @@ Starlette's form parser runs its multipart state machine, part headers and
 field handling on the coroutine that reads the body, so a large upload would
 hold the event loop for as long as parsing takes. Every route reads its form
 through parse_form instead (DomainRoute installs it as ``request.form``, which
-FastAPI's File and Form parameters also call): the body, already bounded by
-RequestBodyLimitMiddleware, is spooled to a temporary file and parsed there.
+FastAPI's File and Form parameters also call): the body is spooled to a
+temporary file and parsed there. RequestBodyLimitMiddleware bounds it before
+any handler runs; parse_form holds it to the same limit itself, so a form is
+bounded on an application that does not install the middleware too.
 """
 
 import tempfile
@@ -16,6 +18,8 @@ from python_multipart.multipart import parse_options_header
 from starlette.datastructures import FormData
 from starlette.formparsers import FormParser, MultiPartException, MultiPartParser
 from starlette.requests import Request
+
+from myf.host import hooks
 
 _SPOOL_IN_MEMORY = 1024 * 1024
 _READ_CHUNK = 64 * 1024
@@ -66,8 +70,13 @@ async def parse_form(
         "max_fields": max_fields,
         "max_part_size": max_part_size,
     }
+    limit = hooks.body_limit(request.scope["path"])
     with tempfile.SpooledTemporaryFile(max_size=_SPOOL_IN_MEMORY) as spool:
+        total = 0
         async for chunk in request.stream():
+            total += len(chunk)
+            if total > limit:
+                raise HTTPException(status_code=413, detail="Request body too large")
             if chunk:
                 await anyio.to_thread.run_sync(spool.write, chunk)
         await anyio.to_thread.run_sync(spool.seek, 0)

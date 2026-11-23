@@ -146,6 +146,63 @@ _JSON_PAIR_RE = scan_pattern(
 )
 
 
+# A key, quoted or bare, whose value opens a container: in JSON-style or
+# Python-style text that is not a whole document (a log line holding part of a
+# payload, a truncated body). The container is redacted whole, since anything
+# inside it is the key's value.
+_CONTAINER_PAIR_RE = scan_pattern(
+    r"""(?:"((?:[^"\\\r\n]|\\[^\r\n]){1,128})"|'((?:[^'\\\r\n]|\\[^\r\n]){1,128})'"""
+    r"""|\b([A-Za-z0-9_-]{1,128}))(\s{0,16}[:=]\s{0,16})[{\[]"""
+)
+_CLOSING = {"{": "}", "[": "]"}
+
+
+def _container_end(txt: str, start: int) -> int:
+    """The index just past the container opened at ``start``, or the end of
+    the text when it is never closed. Brackets inside quoted strings do not
+    count."""
+    stack = []
+    quote = None
+    i = start
+    while i < len(txt):
+        c = txt[i]
+        if quote is not None:
+            if c == "\\":
+                i += 1
+            elif c == quote:
+                quote = None
+        elif c in "\"'":
+            quote = c
+        elif c in _CLOSING:
+            stack.append(_CLOSING[c])
+        elif stack and c == stack[-1]:
+            stack.pop()
+            if not stack:
+                return i + 1
+        i += 1
+    return len(txt)
+
+
+def _redact_containers(txt: str) -> str:
+    out = []
+    position = 0
+    while (m := _CONTAINER_PAIR_RE.search(txt, position)) is not None:
+        quoted, single, bare = m.group(1), m.group(2), m.group(3)
+        key = quoted if quoted is not None else single if single is not None else bare
+        opener = m.end() - 1
+        if not should_redact_value(key, None):
+            out.append(txt[position : m.end()])
+            position = m.end()
+            continue
+        end = _container_end(txt, opener)
+        mark = "'" if single is not None else '"'
+        value = REDACTED if bare is not None else f"{mark}{REDACTED}{mark}"
+        out.append(txt[position:opener] + value)
+        position = end
+    out.append(txt[position:])
+    return "".join(out)
+
+
 def _redact_issued_secrets(text: str) -> str:
     """Replace the tokens and keys the application issues, wherever they
     appear (``hooks.issued_secret_pattern``)."""
@@ -336,6 +393,9 @@ def redact_str(s: str | None) -> str | None:
     if structured is not None:
         return structured
     txt = _URL_RE.sub(lambda m: redact_url(m.group(0)), str(s))
+    # A sensitive key's container value goes whole, before the pair rules
+    # below, which see only scalars, could leave its contents behind.
+    txt = _redact_containers(txt)
     # JSON-style pairs keep their syntax and use the same key policy as objects.
     txt = _redact_json_pairs(txt)
 

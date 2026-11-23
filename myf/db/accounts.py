@@ -35,9 +35,16 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, declared_attr, mapped_column, relationship
+from sqlalchemy.orm import (
+    Mapped,
+    declared_attr,
+    mapped_column,
+    relationship,
+    validates,
+)
 
 from myf.core.datetime_utils import utc_now_naive as utcnow
+from myf.security.names import login_key
 
 
 def association_tables(metadata: MetaData) -> tuple[Table, Table, Table]:
@@ -79,6 +86,9 @@ class UserMixin:
     username: Mapped[str] = mapped_column(
         String(128), unique=True, nullable=False, index=True
     )
+    # security.rate_limit.login_key of the username, set with it: the accounts
+    # a name compares equal to are found without reading every username.
+    login_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     auth_backend: Mapped[str] = mapped_column(
         String(16), nullable=False, default="local", server_default="local"
@@ -128,12 +138,25 @@ class UserMixin:
     # session's snapshot (revalidated against authz_version) and sign-in attaches
     # the effective role. Never persisted.
     effective_role: str | None = None
+    # What a password sign-in proved, read with the row the password was
+    # checked against (auth.credential_generation); the session is issued only
+    # while the account still matches it.
+    verified_credential: tuple[str, int, int] | None = None
     effective_permission_codes: set[str] | None = None
     # A connection acting for the account under granted scopes (an MCP
-    # client's, say) counts those scopes for their own domains only.
+    # client's, say) counts those scopes for their own domains only: it holds
+    # the codes in effective_permission_codes and none they imply
+    # (security.permissions.has_permission), and an application's own checks
+    # that let one domain's permission stand in for another's refuse it.
     scope_limited: bool = False
     session_id: str | None = None
     session_authz_version: int | None = None
+
+    @validates("username")
+    def _keep_login_key(self, _key: str, username: str) -> str:
+        self.login_key = login_key(username)
+        return username
+
     # The CSRF token issued with the session, when it has one (security/csrf.py).
     session_csrf: str | None = None
 

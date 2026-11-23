@@ -222,7 +222,8 @@ def test_the_application_adds_its_route_dependencies_once(hook):
 # -- forms --------------------------------------------------------------------
 
 
-def test_a_multipart_form_is_parsed_with_its_files(client):
+def test_a_multipart_form_is_parsed_with_its_files(client, hook):
+    hook(body_limit=lambda path: 4 * 1024 * 1024)
     response = client.post(
         "/form",
         data={"name": "report"},
@@ -274,6 +275,42 @@ def test_form_limits_apply():
     with pytest.raises(HTTPException) as refused:
         asyncio.run(parse_form(request, max_fields=2))
     assert refused.value.status_code == 400
+
+
+def test_a_form_is_held_to_the_body_limit_without_the_middleware(hook):
+    # An application that reads forms without installing
+    # RequestBodyLimitMiddleware still has each form bounded by its route's
+    # limit, before more of the body is written to the spool.
+    hook(body_limit=lambda path: 8)
+    chunks = [b"a=1&b=2", b"&c=3", b"&d=4"]
+    read = []
+
+    async def receive():
+        chunk = chunks.pop(0)
+        read.append(chunk)
+        return {"type": "http.request", "body": chunk, "more_body": bool(chunks)}
+
+    def form_request():
+        return Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/v1/upload",
+                "headers": [(b"content-type", b"application/x-www-form-urlencoded")],
+            },
+            receive,
+        )
+
+    with pytest.raises(HTTPException) as refused:
+        asyncio.run(parse_form(form_request()))
+    assert (refused.value.status_code, refused.value.detail) == (
+        413,
+        "Request body too large",
+    )
+    assert read == [b"a=1&b=2", b"&c=3"]
+    # A form within the limit is parsed.
+    chunks[:] = [b"a=1&b=2"]
+    assert dict(asyncio.run(parse_form(form_request()))) == {"a": "1", "b": "2"}
 
 
 def test_the_module_logs_under_its_own_name():

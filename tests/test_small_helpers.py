@@ -145,6 +145,12 @@ def test_an_upload_is_measured_and_left_at_its_start():
         ("\tvalue", "'\tvalue"),
         ("a;=b", "a;'=b"),
         ("a\n  -b", "a\n  '-b"),
+        # After a separator, whatever an importer skips at a cell's start is
+        # skipped before the guard too.
+        ("a;\x00=b", "a;\x00'=b"),
+        ("a;\ufeff+b", "a;\ufeff'+b"),
+        ("a\t\v\f@b", "a\t\v\f'@b"),
+        ("a;\r\n =b", "a;\r\n '=b"),
         (42, 42),
         (None, None),
     ],

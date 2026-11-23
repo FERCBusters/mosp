@@ -53,7 +53,7 @@ The application's `main` includes myf's routers (`myf.api.routes.account`, `auth
 
 ### Models
 
-myf reads the application's account models by name: `User`, `Group`, `Permission`, `UserIdentity`, `OidcLoginState`, `MfaCredential`, `MfaRecoveryCode`, `MfaChallenge`, `UserLoginIP`, `SecurityNotification`, `UserSsoEmail`, `SsoEmailChallenge`, `AuditLog`, and the `user_groups`, `user_permissions` and `group_permissions` tables. `myf.db.accounts` supplies a mixin for each model and `association_tables(metadata)` for the tables; an application declares `class User(Base, UserMixin)` and adds its own columns. The application owns these tables and their migrations.
+myf reads the application's account models by name: `User`, `Group`, `Permission`, `UserIdentity`, `OidcLoginState`, `MfaCredential`, `MfaRecoveryCode`, `MfaChallenge`, `UserLoginIP`, `SecurityNotification`, `UserSsoEmail`, `SsoEmailChallenge`, `AuditLog`, and the `user_groups`, `user_permissions` and `group_permissions` tables. `myf.db.accounts` supplies a mixin for each model and `association_tables(metadata)` for the tables; an application declares `class User(Base, UserMixin)` and adds its own columns. The application owns these tables and their migrations. A user's `login_key` (the digest of the name sign-in compares, which finds an account's namesakes by an indexed read) is set whenever its username is assigned through the ORM; a migration or script that writes `users` rows directly sets it with `myf.security.names.login_key`.
 
 ## Development
 

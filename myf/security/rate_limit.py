@@ -3,7 +3,6 @@ from __future__ import annotations
 import ipaddress
 import math
 import time
-import unicodedata
 import uuid
 from typing import Tuple
 
@@ -11,6 +10,7 @@ from redis import Redis
 
 from myf import host
 from myf.security.client_ip import request_ip as client_ip
+from myf.security.names import login_key, login_name, printable_name
 
 __all__ = [
     "address_allowance",
@@ -18,65 +18,11 @@ __all__ = [
     "client_ip",
     "fixed_window_allow",
     "fixed_window_spend",
+    "login_key",
     "login_name",
+    "printable_name",
     "sliding_window_allow",
 ]
-
-# Unicode Default_Ignorable_Code_Point ranges, plus the object replacement
-# character that RFC 4518 also maps to nothing. Directories ignore these when
-# they compare names, so they never distinguish one username from another.
-_IGNORABLE = (
-    (0x00AD, 0x00AD),
-    (0x034F, 0x034F),
-    (0x061C, 0x061C),
-    (0x115F, 0x1160),
-    (0x17B4, 0x17B5),
-    (0x180B, 0x180F),
-    (0x200B, 0x200F),
-    (0x202A, 0x202E),
-    (0x2060, 0x206F),
-    (0x3164, 0x3164),
-    (0xFE00, 0xFE0F),
-    (0xFEFF, 0xFEFF),
-    (0xFFA0, 0xFFA0),
-    (0xFFF0, 0xFFF8),
-    (0xFFFC, 0xFFFC),
-    (0x1BCA0, 0x1BCA3),
-    (0x1D173, 0x1D17A),
-    (0xE0000, 0xE0FFF),
-)
-
-
-def _ignorable(character: str) -> bool:
-    point = ord(character)
-    if unicodedata.category(character) == "Cc" and not character.isspace():
-        return True
-    return any(low <= point <= high for low, high in _IGNORABLE)
-
-
-# Line breaks and control or format characters (bidirectional overrides among
-# them) make one name look like another, so no account name holds them.
-_UNPRINTED = frozenset({"Cc", "Cf", "Zl", "Zp"})
-
-
-def printable_name(username: str) -> bool:
-    """Whether a username holds no control, format or line-break character."""
-    return not any(unicodedata.category(c) in _UNPRINTED for c in username)
-
-
-def login_name(username: str) -> str:
-    """The form in which sign-in names are compared for rate limiting.
-
-    Directories match names regardless of width, case, invisible characters and
-    runs of spaces (Active Directory folds fullwidth forms; RFC 4518 drops
-    ignorable characters and collapses spaces), so every such variant of a
-    name has one form. An empty form means the username is effectively blank.
-    """
-    folded = unicodedata.normalize(
-        "NFKC", unicodedata.normalize("NFKC", username).casefold()
-    )
-    visible = "".join(c for c in folded if not _ignorable(c))
-    return " ".join(visible.split())
 
 
 def address_allowance(address: str | None) -> str | None:

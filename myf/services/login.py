@@ -11,10 +11,10 @@ from myf.core.valkey import get_valkey
 from myf.host.config import settings
 from myf.host.models import User, UserIdentity
 from myf.security import sign_in_throttle as throttle
-from myf.security.auth import authenticate_user
+from myf.security.auth import authenticate_user, credential_generation
 from myf.security.ldap import authenticate_ldap
+from myf.security.names import login_key
 from myf.security.permissions import get_effective_permission_codes
-from myf.security.rate_limit import login_name
 from myf.security.roles import attach_effective_role
 from myf.security.sessions import create_session, delete_session
 from myf.services import security_notifications
@@ -65,16 +65,16 @@ def sign_in_key(db, username: str, method: str = "local") -> str:
     if method != "local":
         return key
     name = username.strip()
-    account_id = db.query(User.id).filter(User.username == name).scalar()
-    if account_id is None:
-        return key
-    compared = login_name(name)
-    # Usernames are few (one organisation's accounts) and this read runs only
-    # for a name that is an account's own.
-    namesakes = sum(
-        login_name(other) == compared for (other,) in db.query(User.username)
+    # One indexed read, the same whether or not the name is an account's, so
+    # neither its cost nor its timing tells an unauthenticated caller which
+    # names exist.
+    namesakes = (
+        db.query(User.id, User.username).filter(User.login_key == login_key(name)).all()
     )
-    if namesakes < 2:
+    if len(namesakes) < 2:
+        return key
+    account_id = next((id_ for id_, other in namesakes if other == name), None)
+    if account_id is None:
         return key
     return hashlib.sha256(f"{key}\0{account_id}".encode()).hexdigest()
 
@@ -104,15 +104,21 @@ def authenticate_password(
     username: str,
     password: str,
     method: str,
-    recognised: bool = False,
+    recognised_by: str | None = None,
 ) -> User:
     """Verify a local or directory password, auditing a rejection.
 
-    Every rejection costs the same lookup and audit write whether or not the
-    username names an account, and all of them receive the same answer.
+    ``recognised_by`` is the account a recognised browser was issued for, if
+    the attempt came from one. Every rejection costs the same lookup and audit
+    write whether or not the username names an account, and all of them
+    receive the same answer.
     """
     if method == "ldap":
-        user = authenticate_ldap(db, username, password, recognised=recognised)
+        user = authenticate_ldap(db, username, password, recognised_by=recognised_by)
+        if user is not None:
+            # The directory holds the password; the versions the session is
+            # issued at are the ones the account had once it was proven.
+            user.verified_credential = credential_generation(user)
     else:
         user = authenticate_user(db, username, password)
     if user is None:
@@ -137,6 +143,7 @@ def complete_local_login(
     context: ChangeContext,
     mfa_verified=False,
     verified_version=None,
+    verified_credential=None,
     csrf_token=None,
 ):
     """Issue a fresh session after password (and any MFA) verification.
@@ -144,6 +151,10 @@ def complete_local_login(
     The browser loads its capabilities from /v1/me after signing in, so the
     response identifies the account only. ``csrf_token`` is the token the
     adapter sends as the CSRF cookie; the session keeps it.
+    ``verified_credential`` is what a password sign-in proved
+    (``User.verified_credential``): a password change, reset, second-factor
+    change or deactivation committed since then refuses the sign-in. A second
+    factor's completion binds the password in its challenge instead.
     """
     method = user.auth_backend or "local"
     # Read the active state and session version together under the row lock,
@@ -160,8 +171,16 @@ def complete_local_login(
         .with_for_update()
         .one_or_none()
     )
-    if account is None or not account.is_active:
-        # Answered as any sign-in to an inactive account is.
+    if (
+        account is None
+        or not account.is_active
+        or (
+            verified_credential is not None
+            and credential_generation(account) != verified_credential
+        )
+    ):
+        # Answered as any sign-in to an inactive account is: the password
+        # proven is no longer the account's, or no longer opens it.
         record_refused_sign_in(db, context, method=method, account_id=user.id)
         raise DomainError(401, "Invalid username or password")
     user = account

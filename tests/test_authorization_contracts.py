@@ -261,3 +261,23 @@ def test_snapshots_resolve_implied_permissions_without_queries(
         "isms.read",
     }
     compute.assert_not_called()
+
+
+def test_a_scope_limited_connection_holds_its_scopes_and_nothing_they_imply(
+    people, hook
+):
+    # A connection acting under granted scopes counts each for its own domain:
+    # a scope that implies another code elsewhere does not carry it.
+    hook(permission_implications=lambda: IMPLIED)
+    db, users = people
+    user = users["reader"]
+    user.effective_role = "normal"
+    user.effective_permission_codes = {"audits.manage", "risk.read"}
+    user.scope_limited = True
+    assert has_permission(db, user, "audits.manage") is True
+    assert has_permission(db, user, "risk.read") is True
+    for code in ("events.read", "isms.read", "risk.manage"):
+        assert has_permission(db, user, code) is False
+    # Without the scopes it was granted, it holds nothing.
+    user.effective_permission_codes = None
+    assert has_permission(db, user, "risk.read") is False

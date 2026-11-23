@@ -489,3 +489,42 @@ def test_the_encoding_check_finds_a_direct_encode(tmp_path):
     # The defect the check guards against: such text does not encode.
     with pytest.raises(UnicodeEncodeError):
         json.dumps({"user": "\ud800"}, ensure_ascii=False).encode("utf-8")
+
+
+@pytest.mark.parametrize(
+    ("text", "redacted"),
+    [
+        (
+            'log: {"password": {"value": "synthetic-secret"}} trailing',
+            'log: {"password": "REDACTED"} trailing',
+        ),
+        (
+            "log {'secret': ['a', 'synthetic-secret']} x",
+            "log {'secret': 'REDACTED'} x",
+        ),
+        ('password={"v":"synthetic-secret"} next', "password=REDACTED next"),
+        # A truncated container is redacted to the end of the text.
+        ('x "token": [1, {"a": "synthetic-secret"}', 'x "token": "REDACTED"'),
+        # Brackets inside quoted strings do not close the container.
+        (
+            '"api-key" : {"a": "}", "b": "synthetic-secret"} tail',
+            '"api-key" : "REDACTED" tail',
+        ),
+        # An escaped quote does not end a string in it.
+        (
+            '"secret": ["a\\"]", "synthetic-secret"] tail',
+            '"secret": "REDACTED" tail',
+        ),
+        # Other keys' containers, and what follows, keep their content.
+        (
+            'keep {"name": {"v": 1}, "password": ["x]y", "synthetic-secret"],'
+            ' "after": 2} done',
+            'keep {"name": {"v": 1}, "password": "REDACTED", "after": 2} done',
+        ),
+        ("note: password reset at {time}", "note: password reset at {time}"),
+    ],
+)
+def test_a_container_under_a_sensitive_key_in_text_is_redacted_whole(text, redacted):
+    # Text that is not a whole document (a log line, a truncated body) can hold
+    # a sensitive key whose value is an object or a list: all of it goes.
+    assert r.redact_str(text) == redacted

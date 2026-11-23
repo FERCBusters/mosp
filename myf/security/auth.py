@@ -12,13 +12,13 @@ from myf.host import hooks
 from myf.host.config import settings
 from myf.host.models import User
 from myf.security.csrf import samesite_policy
+from myf.security.names import login_key, printable_name
 from myf.security.passwords import (
     derive_password_hash,
     hash_password,
     needs_rehash,
     verify_password,
 )
-from myf.security.rate_limit import login_name, printable_name
 from myf.security.sessions import delete_session, get_session
 
 ROLE_ADMIN = "admin"
@@ -226,37 +226,62 @@ def clear_session_cookie(response: Response) -> None:
     )
 
 
-def _raise_work_factor(db: Session, user: User, password: str) -> None:
-    """Store the proven password at the current work factor.
+def _raise_work_factor(
+    db: Session, user: User, verified: str, password: str
+) -> str | None:
+    """Store the proven password at the current work factor; the new hash,
+    or None when the account's password changed meanwhile.
 
     The hash is replaced only if it is still the one that was verified, so a
     password changed meanwhile is never undone. A pending second-factor
     ceremony or SSO email link made against the previous hash ends with it.
     """
-    verified = user.password_hash
+    stronger = derive_password_hash(password)
     replaced = (
         db.query(User)
         .filter(User.id == user.id, User.password_hash == verified)
-        .update(
-            {User.password_hash: derive_password_hash(password)},
-            synchronize_session=False,
-        )
+        .update({User.password_hash: stronger}, synchronize_session=False)
     )
     db.commit()
-    if replaced:
-        db.refresh(user)
+    if not replaced:
+        return None
+    db.refresh(user)
+    return stronger
+
+
+def credential_generation(user) -> tuple[str, int, int]:
+    """The account's password and the versions its sessions are issued at.
+
+    A password change, a reset, a second-factor change or a deactivation moves
+    one of them, so a sign-in that proved an earlier generation issues no
+    session (services.login.complete_local_login).
+    """
+    return (user.password_hash, user.session_version, user.mfa_version)
 
 
 def authenticate_user(db: Session, username: str, password: str) -> User | None:
+    """The active local account ``password`` is right for, or None.
+
+    The account's ``verified_credential`` records the generation the password
+    was checked against, read with the same row before the check: checking a
+    password takes long enough for a change to commit meanwhile, and any later
+    read (a commit expires the loaded account) would show the changed one.
+    """
     u = (username or "").strip()
     user = db.query(User).filter(User.username == u).one_or_none()
     if user is None or not user.is_active or user.auth_backend == "ldap":
         verify_password(password or "", _DUMMY_PASSWORD_HASH)
         return None
-    if not verify_password(password or "", user.password_hash):
+    generation = credential_generation(user)
+    verified = generation[0]
+    if not verify_password(password or "", verified):
         return None
-    if needs_rehash(user.password_hash):
-        _raise_work_factor(db, user, password)
+    if needs_rehash(verified):
+        stronger = _raise_work_factor(db, user, verified, password)
+        if stronger is not None:
+            # The same password, now stored at the current work factor.
+            generation = (stronger, generation[1], generation[2])
+    user.verified_credential = generation
     return user
 
 
@@ -279,8 +304,7 @@ def create_user(
     # Sign-in limits and browser recognition are kept by compared name, so two
     # accounts whose names compare equal would share them: one account's
     # holder would be recognised, and exempt from the limits, for the other.
-    compared = login_name(uname)
-    if any(login_name(name) == compared for (name,) in db.query(User.username)):
+    if db.query(User.id).filter(User.login_key == login_key(uname)).first():
         raise ValueError(
             "a username that differs only in case, width, spacing or invisible"
             " characters already exists"

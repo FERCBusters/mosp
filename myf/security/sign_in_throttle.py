@@ -37,7 +37,7 @@ from redis import Redis
 from myf import host
 from myf.host.config import settings
 from myf.security import encoding
-from myf.security.rate_limit import login_name
+from myf.security.names import login_name
 
 FREE_FAILURES = 5
 FAILURE_CEILING = 100
@@ -114,6 +114,13 @@ def recognised_device(r: Redis, token: str | None, key: str) -> str | None:
         return None
     digest = encoding.digest(raw)
     return digest if r.hget(_device_key(digest), "name") == key else None
+
+
+def device_account(r: Redis, device: str) -> str | None:
+    """The account a recognised browser was issued for."""
+
+    owner = r.hget(_device_key(device), "user")
+    return owner if isinstance(owner, str) and owner else None
 
 
 def reserve_unrecognised_attempt(r: Redis, key: str) -> tuple[bool, int]:

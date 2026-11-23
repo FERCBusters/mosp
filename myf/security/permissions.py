@@ -165,8 +165,12 @@ def has_permission(db: Session, user: User | None, code: str) -> bool:
     if not is_active_user(user):
         return False
 
-    granting = _granting_codes(c)
     cached = _normalise_cached_permission_codes(user.effective_permission_codes)
+    if user.scope_limited:
+        # A connection acting under granted scopes holds exactly those: each
+        # counts for its own domain, so none stands in for another code.
+        return cached is not None and ("*" in cached or c in cached)
+    granting = _granting_codes(c)
     if cached is not None:
         # Snapshots made before an implication was added still resolve it.
         return "*" in cached or not cached.isdisjoint(granting)

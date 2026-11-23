@@ -19,7 +19,7 @@ from myf.api.routes import auth as auth_routes
 from myf.security import auth, encoding
 from myf.security import sign_in_throttle as throttle
 from myf.security.auth import cookie_name as session_cookie_name
-from myf.security.rate_limit import login_name
+from myf.security.names import login_name
 
 # Imported fixtures: the assembled application with an in-memory session store,
 # and a fake directory server.
@@ -173,11 +173,11 @@ def _burst(signin, monkeypatch, username, cookie, size):
         responses.append(None)
         responses[position] = signin.attempt(username, "wrong", client=browser)
 
-    def in_flight(db, context, *, recognised, **credentials):
-        heard[recognised] += 1
+    def in_flight(db, context, *, recognised_by, **credentials):
+        heard[recognised_by is not None] += 1
         if len(responses) < size:
             guess()
-        return real(db, context, recognised=recognised, **credentials)
+        return real(db, context, recognised_by=recognised_by, **credentials)
 
     monkeypatch.setattr(auth_routes.login_service, "authenticate_password", in_flight)
     guess()
@@ -833,6 +833,170 @@ def test_a_deactivation_during_local_sign_in_issues_no_session(
     assert browser.get("/v1/me").status_code == 401
 
 
+def _change_password(db, account):
+    # As a self-service change or an administrator's reset commits it: a new
+    # hash, and the versions that end the account's sessions.
+    db.query(User).filter(User.id == account.id).update(
+        {
+            User.password_hash: auth.hash_password("Crimson thimble softly orbits 82"),
+            User.mfa_version: User.mfa_version + 1,
+        },
+        synchronize_session=False,
+    )
+    db.commit()
+
+
+def _end_sessions(db, account):
+    db.query(User).filter(User.id == account.id).update(
+        {User.session_version: User.session_version + 1}, synchronize_session=False
+    )
+    db.commit()
+
+
+def _change_factors(db, account):
+    db.query(User).filter(User.id == account.id).update(
+        {User.mfa_version: User.mfa_version + 1}, synchronize_session=False
+    )
+    db.commit()
+
+
+@pytest.mark.parametrize(
+    "change",
+    [_change_password, _end_sessions, _change_factors],
+    ids=["password", "sessions", "second-factor"],
+)
+def test_a_change_committed_during_local_sign_in_issues_no_session(
+    signin, monkeypatch, change
+):
+    # A sign-in proves the password the account had when it was read. A change
+    # that ends the account's sessions, committed before the session is issued,
+    # must end this one too: it is refused, and the account's earlier session
+    # is refused as well.
+    user = signin.user()
+    earlier = signin.client()
+    assert signin.attempt(user.username, client=earlier).status_code == 200
+    _deactivate_after_the_password_is_checked(monkeypatch, change)
+
+    refused = signin.attempt(user.username)
+
+    _refused_without_a_session(signin, refused)
+    assert earlier.get("/v1/me").status_code == 401
+    last = (
+        signin.db.query(AuditLog)
+        .filter_by(path="/action/sign-in")
+        .order_by(AuditLog.ts.desc())
+        .first()
+    )
+    assert (last.username, parse_qs(last.query_string)["outcome"]) == (
+        user.username,
+        ["failed"],
+    )
+
+
+@pytest.mark.parametrize("stored", ["current", "older"], ids=["hash", "rehash"])
+def test_a_password_changed_while_it_is_checked_issues_no_session(
+    signin, monkeypatch, stored
+):
+    # Checking a password takes long enough for a change to commit meanwhile,
+    # before the stored hash is raised to the current work factor, if it is.
+    from tests.test_password_rules import legacy_hash
+
+    user = signin.user()
+    if stored == "older":
+        signin.db.get(User, user.id).password_hash = legacy_hash(PASSWORD)
+        signin.db.commit()
+    check = auth.verify_password
+    changed = []
+
+    def slow_check(password, stored_hash):
+        proven = check(password, stored_hash)
+        if not changed:
+            changed.append(True)
+            _change_password(signin.db, signin.db.get(User, user.id))
+        return proven
+
+    monkeypatch.setattr(auth, "verify_password", slow_check)
+
+    refused = signin.attempt(user.username)
+
+    _refused_without_a_session(signin, refused)
+    if stored == "current":
+        return
+    # The changed password stands; the older one was not raised over it. (The
+    # test's change shares the request's connection, so it outlasts the request
+    # only when the request commits, as raising the work factor does.)
+    signin.db.expire_all()
+    assert auth.verify_password(
+        "Crimson thimble softly orbits 82",
+        signin.db.get(User, user.id).password_hash,
+    )
+
+
+@pytest.mark.parametrize("stored", ["current", "older"], ids=["hash", "rehash"])
+@pytest.mark.parametrize(
+    "change",
+    [_change_password, _end_sessions, _change_factors],
+    ids=["password", "sessions", "second-factor"],
+)
+def test_a_change_committed_while_the_password_is_checked_starts_no_ceremony(
+    signin, monkeypatch, stored, change
+):
+    # A sign-in that goes on to a second factor binds the ceremony to what the
+    # password check proved, read before the check: a change committed while
+    # it ran (or while an older hash was raised) refuses the ceremony.
+    from tests.test_password_rules import legacy_hash
+    from tests.testapp.models import MfaChallenge
+
+    monkeypatch.setattr(settings, "mfa_policy", "all")
+    user = signin.user()
+    if stored == "older":
+        signin.db.get(User, user.id).password_hash = legacy_hash(PASSWORD)
+        signin.db.commit()
+    check = auth.verify_password
+    changed = []
+
+    def slow_check(password, stored_hash):
+        proven = check(password, stored_hash)
+        if not changed:
+            changed.append(True)
+            change(signin.db, signin.db.get(User, user.id))
+        return proven
+
+    monkeypatch.setattr(auth, "verify_password", slow_check)
+
+    refused = signin.attempt(user.username)
+
+    assert (refused.status_code, refused.json()["detail"]) == (
+        401,
+        "Account changed; sign in again",
+    )
+    assert signin.db.query(MfaChallenge).filter_by(user_id=user.id).count() == 0
+
+
+def test_a_change_during_directory_sign_in_issues_no_session(
+    signin, directory, monkeypatch
+):
+    monkeypatch.setattr(settings, "ldap_enabled", True)
+    _deactivate_after_the_password_is_checked(monkeypatch, _change_factors)
+
+    refused = signin.attempt("alice", "password", method="ldap")
+
+    _refused_without_a_session(signin, refused)
+
+
+def test_an_unchanged_account_signs_in_at_the_generation_it_proved(signin):
+    # Raising an older hash is the sign-in's own change, not a later one.
+    from tests.test_password_rules import legacy_hash
+
+    user = signin.user()
+    signin.db.get(User, user.id).password_hash = legacy_hash(PASSWORD)
+    signin.db.commit()
+    browser = signin.client()
+
+    assert signin.attempt(user.username, client=browser).status_code == 200
+    assert browser.get("/v1/me").status_code == 200
+
+
 def test_an_account_removed_during_sign_in_gets_no_session(signin, monkeypatch):
     user = signin.user()
 
@@ -1024,3 +1188,116 @@ def test_accounts_that_already_share_a_compared_name_keep_separate_limits(signin
     single = signin.user()
     assert sign_in_key(signin.db, single.username) == throttle.name_key(single.username)
     assert sign_in_key(signin.db, "alice", "ldap") == throttle.name_key("alice", "ldap")
+
+
+def test_a_sign_in_key_costs_one_indexed_read_whether_or_not_the_name_exists(
+    signin,
+):
+    # The key is worked out before any limit applies, so its cost must not
+    # grow with the number of accounts or differ for a name that exists.
+    from sqlalchemy import event
+
+    from myf.services.login import sign_in_key
+
+    existing = signin.user()
+    for _ in range(3):
+        signin.user()
+    statements = []
+
+    def seen(conn, cursor, statement, parameters, context, executemany):
+        if not statement.startswith("SAVEPOINT"):
+            statements.append(statement)
+
+    engine = signin.db.get_bind()
+    event.listen(engine, "before_cursor_execute", seen)
+    try:
+        read = {}
+        for name in (existing.username, "nobody-" + existing.username):
+            statements.clear()
+            sign_in_key(signin.db, name)
+            read[name] = list(statements)
+    finally:
+        event.remove(engine, "before_cursor_execute", seen)
+
+    reads = list(read.values())
+    assert len(reads[0]) == 1 and reads[0] == reads[1]
+    assert "WHERE users.login_key = " in reads[0][0]
+
+
+def test_an_account_keeps_the_key_of_the_name_it_is_given(signin):
+    from myf.security.names import login_key
+
+    account = User(username="Fiona", password_hash="!", role="normal")
+    assert account.login_key == login_key("fiona")
+    account.username = "Ｆｉｏｎａ２"
+    assert account.login_key == login_key("fiona2")
+
+
+def test_directory_provisioning_never_takes_a_local_accounts_compared_name(
+    signin, directory, monkeypatch
+):
+    # A local account named like the provisioned name in another case gets a
+    # directory account of its own, under a name nobody chose.
+    monkeypatch.setattr(settings, "ldap_enabled", True)
+    monkeypatch.setattr(settings, "ldap_auto_provision", True)
+    local = signin.user()
+    local.username = "LDAP:Alice"
+    signin.db.commit()
+
+    assert signin.attempt("alice", "password", method="ldap").status_code == 200
+
+    provisioned = (
+        signin.db.query(User)
+        .filter(User.auth_backend == "ldap", User.id != local.id)
+        .one()
+    )
+    assert provisioned.username.startswith("ldap:")
+    assert provisioned.username != "ldap:alice"
+
+
+def test_a_browser_recognised_for_a_directory_entry_is_not_for_a_namesake_entry(
+    signin, directory, monkeypatch
+):
+    # A directory may hold distinct entries whose names the application
+    # compares as one. A browser recognised for one entry's account skips that
+    # entry's limits only: its guesses at the other entry count against it.
+    from types import SimpleNamespace
+
+    from myf.security import ldap
+
+    monkeypatch.setattr(settings, "ldap_enabled", True)
+    state, _, _ = directory
+    own = state["entries"][0]
+    browser = signin.client()
+    assert (
+        signin.attempt("alice", "password", method="ldap", client=browser).status_code
+        == 200
+    )
+    issuer = "ldap:ldap://directory.example:389"
+
+    def entry_failures(subject):
+        key = throttle._failures_key(ldap._entry_key(issuer, subject))
+        return int(ldap.get_valkey().get(key) or 0)
+
+    state["entries"] = [
+        SimpleNamespace(
+            entry_dn="uid=ALICE,ou=People,dc=example",
+            entry_attributes_as_dict={
+                "uid": ["ALICE"],
+                "mail": ["other@example.org"],
+                "entryUUID": ["other-id"],
+            },
+        )
+    ]
+    state["bind"] = False
+    for n in range(3):
+        refused = signin.attempt("ALICE", f"wrong-{n}", method="ldap", client=browser)
+        assert refused.status_code == 401
+    assert entry_failures("other-id") == 3
+
+    # Its own entry's wrong passwords are still heard as the recognised
+    # browser's, without counting against the entry.
+    state["entries"] = [own]
+    refused = signin.attempt("alice", "wrong", method="ldap", client=browser)
+    assert refused.status_code == 401
+    assert entry_failures("immutable-id") == 0

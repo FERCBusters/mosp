@@ -122,7 +122,7 @@ def login(
             username=payload.username,
             password=payload.password,
             method=payload.method,
-            recognised=device is not None,
+            recognised_by=throttle.device_account(r, device) if device else None,
         )
     except DomainError:
         if device is not None:
@@ -161,7 +161,9 @@ def login(
                 outcome="mfa-refused",
             )
             raise
-    response = complete_local_login(db, user, request)
+    response = complete_local_login(
+        db, user, request, verified_credential=user.verified_credential
+    )
     throttle.set_device_cookie(response, token)
     return response
 
@@ -173,7 +175,13 @@ def _limited(retry: int) -> JSONResponse:
 
 
 def complete_local_login(
-    db, user, request, *, mfa_verified=False, verified_version=None
+    db,
+    user,
+    request,
+    *,
+    mfa_verified=False,
+    verified_version=None,
+    verified_credential=None,
 ):
     # Freeze the version proven by this ceremony before any commit expires ORM state.
     csrf_token = generate_csrf_token()
@@ -184,6 +192,7 @@ def complete_local_login(
         context=change_context(request),
         mfa_verified=mfa_verified,
         verified_version=verified_version,
+        verified_credential=verified_credential,
         csrf_token=csrf_token,
     )
     response = JSONResponse(result)

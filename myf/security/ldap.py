@@ -30,7 +30,7 @@ from myf.host import hooks
 from myf.host.config import settings
 from myf.host.models import User, UserIdentity
 from myf.security import sign_in_throttle as throttle
-from myf.security.rate_limit import printable_name
+from myf.security.names import login_key, printable_name
 from myf.security.regex import scan_pattern
 
 log = logging.getLogger(__name__)
@@ -82,18 +82,26 @@ def _entry_key(issuer, subject) -> str:
     return f"ldap:{entry}"
 
 
-def _entry_allowed(issuer, subject, *, recognised: bool) -> bool:
+def _entry_allowed(db, issuer, subject, *, recognised_by: str | None) -> bool:
     """Count a password tried against the directory entry a search matched.
 
     Directories match a name regardless of case, width and spacing beyond
     the application's own comparison, so every spelling that reaches one entry shares
     one throttle of the sign-in policy's shape (myf/security/sign_in_throttle.py).
-    A browser recognised for the typed name skips it, as it skips the name's.
+    A recognised browser skips it only for the entry its own account is linked
+    to: a directory may hold distinct entries whose names the application
+    compares as one, and a browser recognised for one is not for the other.
     A held attempt is answered as a wrong password, so it cannot show that a
     spelling reached an entry.
     """
-    if recognised:
-        return True
+    if recognised_by is not None and db is not None:
+        owner = (
+            db.query(UserIdentity.user_id)
+            .filter_by(provider="ldap", issuer=issuer, subject=subject)
+            .scalar()
+        )
+        if owner is not None and str(owner) == recognised_by:
+            return True
     allowed, _ = throttle.reserve_unrecognised_attempt(
         get_valkey(), _entry_key(issuer, subject)
     )
@@ -115,7 +123,9 @@ def _typed_bytes(password) -> bytes | None:
         return None
 
 
-def directory_identity(username, password, *, recognised: bool = False):
+def directory_identity(
+    username, password, *, db=None, recognised_by: str | None = None
+):
     if (
         not settings.ldap_enabled
         or not username
@@ -253,7 +263,7 @@ def directory_identity(username, password, *, recognised: bool = False):
         issuer = f"ldap:{url.scheme}://{url.hostname.lower()}:{url.port or (636 if url.scheme == 'ldaps' else 389)}"
         if len(issuer) > 512:
             raise DirectoryUnavailable("LDAP URL too long")
-        if not _entry_allowed(issuer, subject, recognised=recognised):
+        if not _entry_allowed(db, issuer, subject, recognised_by=recognised_by):
             return None
         bound = connect(entry.entry_dn, typed, service=False)
         if bound is None:
@@ -285,8 +295,10 @@ def directory_identity(username, password, *, recognised: bool = False):
                 connection.unbind()
 
 
-def authenticate_ldap(db, username, password, *, recognised: bool = False):
-    identity = directory_identity(username, password, recognised=recognised)
+def authenticate_ldap(db, username, password, *, recognised_by: str | None = None):
+    identity = directory_identity(
+        username, password, db=db, recognised_by=recognised_by
+    )
     if not identity:
         return None
     row = (
@@ -311,7 +323,7 @@ def authenticate_ldap(db, username, password, *, recognised: bool = False):
     if (
         len(name) > 128
         or not printable_name(name)
-        or db.query(User.id).filter_by(username=name).first()
+        or db.query(User.id).filter(User.login_key == login_key(name)).first()
     ):
         name = "ldap:" + uuid.uuid4().hex
     user = User(
