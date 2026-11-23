@@ -15,7 +15,13 @@ from mosp.core.datetime_utils import utc_now_naive as now
 from mosp.core.valkey import get_valkey
 from mosp.host import hooks
 from mosp.host.config import settings
-from mosp.host.models import AuditLog, MfaChallenge, MfaCredential, MfaRecoveryCode, User
+from mosp.host.models import (
+    AuditLog,
+    MfaChallenge,
+    MfaCredential,
+    MfaRecoveryCode,
+    User,
+)
 from mosp.security.encoding import digest, unb64url
 from mosp.security.rate_limit import (
     address_window_allow,

@@ -184,5 +184,6 @@ def test_the_report_names_each_kind(tmp_path, capsys):
     assert "Reached only by b: 2\n  mosp.api: CONSTANT, lazy\n" in out
     assert "Methods whose name nothing uses: 1\n  mosp.api:Parser.stray\n" in out
     assert (
-        "Hooks no application provides (mosp's default always runs): 1\n  pages\n" in out
+        "Hooks no application provides (mosp's default always runs): 1\n  pages\n"
+        in out
     )

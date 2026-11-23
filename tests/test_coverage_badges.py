@@ -87,7 +87,9 @@ def test_findings_are_counted_and_shown_as_failing(tmp_path):
     ],
 )
 def test_the_mypy_count_comes_from_its_summary_line(summary, errors):
-    assert badges.mypy_errors("mosp/x.py:1: note: detail\n" + summary + "\n\n") == errors
+    assert (
+        badges.mypy_errors("mosp/x.py:1: note: detail\n" + summary + "\n\n") == errors
+    )
 
 
 @pytest.mark.parametrize(

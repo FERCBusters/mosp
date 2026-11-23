@@ -57,7 +57,9 @@ def test_the_pin_moves_and_nothing_else_changes(checkout, tmp_path):
     assert (out / "outputs.txt").read_text() == f"changed=true\nprevious={OLD}\n"
     assert (out / "projects.txt").read_text() == "services/api\n"
     assert (
-        (out / "commit-message.txt").read_text().startswith(f"Move mosp to {NEW[:12]}\n")
+        (out / "commit-message.txt")
+        .read_text()
+        .startswith(f"Move mosp to {NEW[:12]}\n")
     )
     body = (out / "pr-body.md").read_text()
     assert f"https://github.com/FERCBusters/mosp/compare/{OLD}...{NEW}" in body

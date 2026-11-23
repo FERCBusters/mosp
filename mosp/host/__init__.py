@@ -35,7 +35,9 @@ def bind(*, name: str, title: str, **modules: str) -> None:
     """Name the application and the module that plays each role."""
     for key, value in (("name", name), ("title", title)):
         if _identity.get(key, value) != value:
-            raise RuntimeError(f"mosp's application {key} is already {_identity[key]!r}")
+            raise RuntimeError(
+                f"mosp's application {key} is already {_identity[key]!r}"
+            )
     if not name.isidentifier() or name != name.lower():
         raise ValueError("An application name is a lower-case identifier")
     _identity.update(name=name, title=title)
