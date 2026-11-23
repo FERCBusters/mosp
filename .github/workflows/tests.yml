@@ -58,11 +58,37 @@ jobs:
           poetry env use "${PYTHON_BIN}"
           poetry install --with dev --no-interaction --no-ansi
 
-      - name: Check formatting, lint and types
+      - name: Check Python formatting
+        run: poetry run ruff format --check .
+
+      - name: Check Python lint
         run: |
-          poetry run ruff format --check .
+          mkdir -p test-results
+          # The JSON findings feed the ruff badge; the second run decides the step.
+          poetry run ruff check . --exit-zero --output-format=json \
+            --output-file test-results/ruff-findings.json
           poetry run ruff check .
-          poetry run mypy
+
+      - name: Check Python types
+        run: |
+          set -o pipefail
+          mkdir -p test-results
+          # mypy's summary line, kept in the report, feeds the mypy badge.
+          poetry run mypy | tee test-results/mypy-report.txt
 
       - name: Run tests with full branch coverage
-        run: poetry run pytest --cov=myf --cov-branch --cov-report=term-missing:skip-covered --cov-fail-under=100
+        run: |
+          mkdir -p test-results
+          # The JSON report feeds the coverage badge.
+          poetry run pytest --cov=myf --cov-branch \
+            --cov-report=term-missing:skip-covered \
+            --cov-report=json:test-results/coverage.json \
+            --cov-fail-under=100
+
+      - name: Upload test results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: myf-test-results
+          path: test-results/
+          if-no-files-found: warn

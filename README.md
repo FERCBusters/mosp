@@ -1,5 +1,9 @@
 # myf
 
+[![Coverage](https://github.com/FERCBusters/myf/raw/badges/coverage.svg)](https://github.com/FERCBusters/myf/actions/workflows/tests.yml?query=branch%3Amain)
+[![mypy](https://github.com/FERCBusters/myf/raw/badges/mypy.svg)](https://github.com/FERCBusters/myf/actions/workflows/tests.yml?query=branch%3Amain)
+[![ruff](https://github.com/FERCBusters/myf/raw/badges/ruff.svg)](https://github.com/FERCBusters/myf/actions/workflows/tests.yml?query=branch%3Amain)
+
 myf ("My Framework") is the shared backend of KEEN, OSPMAE and MIDENA: the sign-in, session, single sign-on, second-factor, CSRF, role and permission machinery, the request middleware and the security primitives each of them runs on. It plays the part on the server that the MOSP Design System plays in the browser. An application built on myf holds only its own routes, services, models, migrations, permission catalogue and middleware.
 
 ## What myf provides
