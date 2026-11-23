@@ -17,7 +17,7 @@ from myf.security.route_policy import (
 from tests.assembled import PASSWORD, unsafe
 from tests.testapp import hooks as testapp_hooks
 from tests.testapp.config import settings
-from tests.testapp.models import User
+from tests.testapp.models import AuditLog, User
 
 
 def _write(site, path, *codes, role="normal"):
@@ -176,3 +176,70 @@ def test_bootstrap_failures_name_the_settings_and_nothing_supplied(
     if password:
         assert password not in message
     assert db.query(User).count() == 0
+
+
+def test_an_administrator_namespace_may_leave_a_route_to_check_itself(site, hook):
+    own = RoutePolicy(admin_exempt=RouteSet({"GET": ("/v1/admin/overview",)}))
+    hook(route_policy=lambda: testapp_hooks.POLICY | own)
+    reader = site.client(site.user())
+    assert reader.get("/v1/admin/overview").json() == {"admin": True}
+    # The exemption names one method and route.
+    assert reader.post("/v1/admin/overview", headers=unsafe(reader)).status_code == 403
+
+
+def test_the_application_masks_paths_before_the_audit_trail_keeps_them(site, hook):
+    hook(audit_path=lambda path: path.replace("secret-token", "REDACTED"))
+    client = site.client(site.user())
+    client.get("/v1/notes-by-link/secret-token")
+    site.db.expire_all()
+    paths = {row.path for row in site.db.query(AuditLog).all()}
+    assert "/v1/notes-by-link/REDACTED" in paths
+    assert not any("secret-token" in path for path in paths)
+
+
+def test_a_declared_admin_write_needs_an_administrator(site, hook):
+    own = RoutePolicy(admin_writes=RouteSet({"POST": ("/v1/things",)}))
+    hook(route_policy=lambda: testapp_hooks.POLICY | own)
+    assert _write(site, "/v1/things") == (403, {"detail": "Admin role required"})
+    assert _write(site, "/v1/things", role="admin") == (200, {"made": True})
+
+
+def test_an_application_may_close_every_write_it_has_not_declared(site, hook):
+    closed = RoutePolicy(
+        admin_writes=RouteSet({"POST": ("/v1/reports/run",)}),
+        refuse_undeclared_writes=True,
+    )
+    hook(route_policy=lambda: testapp_hooks.POLICY | closed)
+    refused = (403, {"detail": "This route accepts no changes"})
+    # Administrators too: nobody decided who may call it.
+    assert _write(site, "/v1/things") == refused
+    assert _write(site, "/v1/things", role="admin") == refused
+    # Declared writes, admin namespaces and myf's own routes stay open as
+    # declared.
+    assert _write(site, "/v1/gated", "gated.write") == (200, {"gated": True})
+    assert _write(site, "/v1/notes/7") == (200, {"note": 7})
+    assert _write(site, "/v1/admin/overview", role="admin")[0] == 405
+    assert _write(site, "/v1/reports/run", role="admin") == (200, {"ran": True})
+    client = site.client(site.user())
+    assert client.post("/v1/auth/logout", headers=unsafe(client)).status_code == 204
+
+
+@pytest.mark.parametrize(
+    "referer,kept",
+    [
+        (
+            "https://app.example/v1/notes-by-link/secret-token?token=abc&page=2#frag",
+            "https://app.example/v1/notes-by-link/REDACTED?token=REDACTED&page=2",
+        ),
+        ("https://app.example/page", "https://app.example/page"),
+        ("   ", None),
+        ("https://[::1", None),
+    ],
+)
+def test_the_page_a_request_came_from_is_kept_masked(site, hook, referer, kept):
+    hook(audit_path=lambda path: path.replace("secret-token", "REDACTED"))
+    client = site.client(site.user())
+    client.get("/v1/things", headers={"Referer": referer})
+    site.db.expire_all()
+    (row,) = site.db.query(AuditLog).filter_by(path="/v1/things").all()
+    assert row.referer == kept

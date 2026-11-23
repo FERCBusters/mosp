@@ -236,3 +236,28 @@ def normalize_group_name(name: str) -> str:
 def normalize_group_description(desc: str | None) -> str | None:
     d = (desc or "").strip()
     return d or None
+
+
+def bump_authz_versions(db: Session, user_ids) -> None:
+    """Make each account's sessions recompute their permissions on next use.
+
+    Every change to who holds which role, group or permission calls this in the
+    transaction that makes the change.
+    """
+    ids = sorted({uid for uid in (user_ids or []) if uid})
+    if not ids:
+        return
+    db.query(User).filter(User.id.in_(ids)).update(
+        {User.authz_version: User.authz_version + 1},
+        synchronize_session=False,
+    )
+
+
+def group_member_ids(db: Session, group_id) -> list:
+    """The accounts a change to the group's role or permissions reaches."""
+    return [
+        uid
+        for (uid,) in db.query(user_groups.c.user_id).filter(
+            user_groups.c.group_id == group_id
+        )
+    ]

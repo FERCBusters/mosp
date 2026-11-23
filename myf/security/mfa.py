@@ -99,8 +99,14 @@ def required(db, user):
 
 
 def local_session_allowed(db, user, session):
-    if session.get("auth_method", "local") not in {"local", "ldap"}:
-        return True
+    method = session.get("auth_method", "local")
+    if method not in {"local", "ldap"}:
+        # A session opened through a provider lasts while that provider is
+        # one this installation still signs people in with.
+        from myf.security.oidc import get_sso_provider
+
+        provider = get_sso_provider(method)
+        return provider is not None and provider.enabled
     if int(session.get("mfa_version", 0)) != user.mfa_version:
         return False
     if user.mfa_enabled or required(db, user):
@@ -182,6 +188,27 @@ def audit(db, user, action, request=None, *, ip=None):
             client_ip=ip or (client_ip(request) if request else None),
         )
     )
+
+
+def operator_reset(db, user) -> None:
+    """An operator's recovery of a local account that has lost its factors.
+
+    Every authenticator, recovery code and pending ceremony goes, as does any
+    wrong-code refusal, and the enrolment version moves on, so the account's
+    local sessions end; the owner is mailed a security notice. Where the
+    policy requires a second factor, enrolment is demanded again at the next
+    sign-in. The caller holds the user row's lock and commits.
+    """
+    for model in (MfaCredential, MfaRecoveryCode, MfaChallenge):
+        db.query(model).filter(model.user_id == user.id).delete(
+            synchronize_session=False
+        )
+    user.mfa_enabled = False
+    user.mfa_totp_secret = None
+    user.mfa_totp_last_step = -1
+    user.mfa_version += 1
+    clear_wrong_codes(user)
+    audit(db, user, "operator-reset")
 
 
 def start(db, user, request, purpose="login"):

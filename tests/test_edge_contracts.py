@@ -435,3 +435,31 @@ def test_an_identity_provider_must_answer_without_compression(monkeypatch):
     with pytest.raises(ValueError, match="Accept-Encoding: identity"):
         asyncio.run(fetch())
     assert closed == [True]
+
+
+def test_a_sliding_window_admits_its_limit_in_any_window(store):
+    from myf.security.rate_limit import sliding_window_allow
+
+    def take(at):
+        return sliding_window_allow(store, "costly", 2, 60, now=at)
+
+    assert take(1000) == (True, 0)
+    assert take(1030) == (True, 0)
+    # A fixed window starting at 1000 would open again at 1060; this waits
+    # until the first attempt leaves the window.
+    assert take(1059) == (False, 1)
+    assert take(1060.5) == (True, 0)
+    assert take(1061) == (False, 29)
+    assert store.zcard("costly") == 2
+    assert sliding_window_allow(store, "free", 0, 60) == (True, 0)
+
+
+def test_a_sliding_window_without_its_store_follows_the_callers_choice():
+    from myf.security.rate_limit import sliding_window_allow
+
+    class Down:
+        def pipeline(self, transaction=True):
+            raise ConnectionError("down")
+
+    assert sliding_window_allow(Down(), "k", 1, 60) == (False, 60)
+    assert sliding_window_allow(Down(), "k", 1, 60, fail_closed=False) == (True, 0)

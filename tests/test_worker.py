@@ -124,3 +124,60 @@ def test_expired_records_are_deleted_oldest_first_in_short_batches(db, monkeypat
     monkeypatch.setattr(settings, "audit_log_retention_days", 0)
     assert audit_retention.remove_expired(now + timedelta(days=10_000)) == (0, False)
     assert kept() == [0, 1, 399]
+
+
+def test_expired_sign_in_rows_are_removed_and_current_ones_kept(db, monkeypatch):
+    from myf.services import housekeeping
+    from tests.testapp.models import (
+        MfaChallenge,
+        OidcLoginState,
+        SsoEmailChallenge,
+        User,
+    )
+
+    monkeypatch.setattr(
+        housekeeping,
+        "SessionLocal",
+        sessionmaker(bind=db.get_bind(), join_transaction_mode="create_savepoint"),
+    )
+    now = utc_now_naive()
+    user = User(username="kept", password_hash="x", role="normal")
+    db.add(user)
+    db.flush()
+    for expires in (now - timedelta(seconds=1), now + timedelta(minutes=5)):
+        db.add(_row(OidcLoginState, expires))
+        db.add(_row(MfaChallenge, expires, user_id=user.id))
+        db.add(_row(SsoEmailChallenge, expires, user_id=user.id))
+    db.commit()
+
+    assert housekeeping.remove_expired(now) == {
+        "oidc_login_states": 1,
+        "mfa_challenges": 1,
+        "sso_email_challenges": 1,
+    }
+    db.expire_all()
+    for model in (OidcLoginState, MfaChallenge, SsoEmailChallenge):
+        assert db.query(model).count() == 1
+
+
+def _row(model, expires, **fields):
+    import secrets
+
+    token = secrets.token_hex(8)
+    values = {
+        "OidcLoginState": dict(state=token, nonce=token, code_verifier=token),
+        "MfaChallenge": dict(
+            token_hash=token,
+            purpose="sign-in",
+            stage="verify",
+            version=0,
+            password_digest=token,
+        ),
+        "SsoEmailChallenge": dict(
+            token_hash=token,
+            email=f"{token}@example.org",
+            mfa_version=0,
+            password_digest=token,
+        ),
+    }[model.__name__]
+    return model(expires_at=expires, **values, **fields)

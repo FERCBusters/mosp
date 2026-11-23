@@ -148,10 +148,10 @@ def test_a_session_naming_no_valid_user_id_is_refused(production_client):
 
 
 def test_the_application_decides_which_stored_sessions_still_sign_in(
-    production_client,
-    hook,
+    production_client, hook, monkeypatch
 ):
     client, redis, admin, reader = production_client
+    monkeypatch.setattr(settings, "oidc_enabled", True)
     asked = []
 
     def allowed(db, user, session):

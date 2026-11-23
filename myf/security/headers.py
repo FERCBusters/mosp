@@ -2,6 +2,8 @@
 
 from myf.host.config import settings
 
+DEFAULT_CSP = b"default-src 'none'; frame-ancestors 'none'; sandbox"
+
 
 class SecurityHeadersMiddleware:
     def __init__(self, app):
@@ -19,6 +21,7 @@ class SecurityHeadersMiddleware:
                     b"referrer-policy": b"strict-origin-when-cross-origin",
                     b"cross-origin-opener-policy": b"same-origin",
                     b"cross-origin-embedder-policy": b"require-corp",
+                    b"cross-origin-resource-policy": b"same-origin",
                     b"x-permitted-cross-domain-policies": b"none",
                     b"permissions-policy": b"geolocation=(), microphone=(), camera=()",
                     b"cache-control": b"no-store",
@@ -30,6 +33,10 @@ class SecurityHeadersMiddleware:
                     for k, v in message.get("headers", [])
                     if k.lower() not in policy
                 ]
+                # API answers are data, never documents: a response that sets
+                # no policy of its own gets one that runs and frames nothing.
+                if not any(k.lower() == b"content-security-policy" for k, _ in headers):
+                    headers.append((b"content-security-policy", DEFAULT_CSP))
                 message = {**message, "headers": headers + list(policy.items())}
             await send(message)
 

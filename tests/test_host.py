@@ -34,6 +34,10 @@ def test_hooks_an_application_leaves_out_keep_their_defaults(monkeypatch):
     assert hooks.permission_implications() == {}
     assert hooks.origin_required() is False
     assert hooks.body_limit("/anything") == hooks.DEFAULT_BODY_LIMIT
+    # myf's own routes keep their limits whatever the application says.
+    assert hooks.body_limit("/v1/auth/login") == 16 * 1024
+    assert hooks.body_limit("/v1/me/password") == 16 * 1024
+    assert hooks.body_limit("/v1/auth/mfa/webauthn/register") == 256 * 1024
     assert hooks.encoded_slash_routes() is None
     assert hooks.measured_fields() == {}
     assert hooks.issued_secret_pattern() is None
@@ -46,6 +50,7 @@ def test_hooks_an_application_leaves_out_keep_their_defaults(monkeypatch):
     assert hooks.json_value_limit("/x") == hooks.DEFAULT_JSON_VALUES
     assert hooks.inner_request_user(None, None) is hooks.NOT_INNER
     assert hooks.bootstrap_allowed() is True
+    assert hooks.audit_path("/v1/x") == "/v1/x"
 
 
 def test_an_application_hook_replaces_the_default(hook):
@@ -63,6 +68,7 @@ def test_an_application_hook_replaces_the_default(hook):
     assert hooks.sign_in_methods() == {"demo": None}
     assert hooks.origin_required() is True
     assert hooks.body_limit("/x") == 10
+    assert hooks.body_limit("/v1/auth/login") == 16 * 1024
 
 
 def test_an_application_name_is_a_lower_case_identifier():

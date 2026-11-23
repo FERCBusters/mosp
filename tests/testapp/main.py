@@ -2,13 +2,14 @@
 routes, middleware and error contract, plus a few routes of its own that
 exercise the route policy."""
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Request, WebSocket
 from fastapi.exceptions import RequestValidationError
 
 from myf import middleware
 from myf.api.errors import domain_error_response, validation_error_response
-from myf.api.routes import auth, mfa, sso_emails
+from myf.api.routes import account, auth, mfa, sso_emails
 from myf.api.routing import Router
+from myf.realtime import sockets
 from myf.security.auth import require_admin
 from myf.security.headers import SecurityHeadersMiddleware
 from myf.security.request_limits import RequestBodyLimitMiddleware
@@ -72,6 +73,11 @@ def users(user=Depends(require_admin)):
     return {"users": []}
 
 
+@own.websocket("/ws/notifications")
+async def notifications(websocket: WebSocket):
+    await sockets.serve(websocket)
+
+
 @own.get("/health")
 def health():
     return {"ok": True}
@@ -86,7 +92,7 @@ app = FastAPI(
         RequestValidationError: validation_error_response,
     },
 )
-for router in (auth.router, mfa.router, sso_emails.router, own):
+for router in (account.router, auth.router, mfa.router, sso_emails.router, own):
     app.include_router(router)
 middleware.install(app)
 app.add_middleware(RequestBodyLimitMiddleware)

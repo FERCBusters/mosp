@@ -440,6 +440,23 @@ def test_a_new_directory_user_never_takes_an_existing_account_name(db, directory
     assert ldap.verify_ldap_user(db, taken, "password") is False
 
 
+@pytest.mark.parametrize("name", ["ali\u202ece", "two\nlines"])
+def test_a_directory_name_no_account_may_hold_gets_a_generated_one(
+    db, directory, monkeypatch, name
+):
+    found = {
+        "issuer": "ldap:ldap://directory.example",
+        "subject": "immutable-id",
+        "username": name,
+        "email": None,
+    }
+    monkeypatch.setattr(ldap, "directory_identity", lambda *a, **kw: found)
+
+    user = ldap.authenticate_ldap(db, "alice", "password")
+
+    assert re.fullmatch("ldap:[0-9a-f]{32}", user.username)
+
+
 def test_empty_password_never_connects(directory):
     assert ldap.directory_identity("alice", "") is None
     assert directory[1] == []

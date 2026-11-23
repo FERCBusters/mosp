@@ -1,19 +1,23 @@
-"""One parsing boundary for XML documents returned by evidence sources.
+"""One parsing boundary for XML documents from outside the application: feeds
+an application collects and documents its users supply.
 
 A document type declaration's internal subset can declare entities and default
-attribute values, which multiply a document's size while it is parsed: a feed
-within the collection response limit could otherwise occupy gigabytes once its
-tree is built. Expat's own amplification limit covers entities only, and lets
-each entity grow up to a hundredfold. Feeds have no use for an internal subset,
-so such documents are refused before a tree is built. A declaration that names
-only an external DTD remains accepted; that DTD is never fetched.
+attribute values, which multiply a document's size while it is parsed: a
+document within its size limit could otherwise occupy gigabytes once its tree
+is built. Expat's own amplification limit covers entities only, and lets each
+entity grow up to a hundredfold. Such documents have no use for an internal
+subset, so they are refused before a tree is built. A declaration that names
+only an external DTD remains accepted (that DTD is never fetched) unless the
+caller asks for strict parsing, which refuses any declaration and any
+processing instruction.
 
 A namespace name multiplies too: the tree holds every distinct qualified name
 as text that begins with its namespace name, so a document that declares one
 long name and uses it on many short element or attribute names costs the
-product of the two. Feed namespaces are short, so a document declaring a
-longer name is refused as well. Within those rules a tree still costs many
-times its text, so documents are also bounded in size before parsing.
+product of the two. The namespaces these documents use are short, so a
+document declaring a longer name is refused as well. Within those rules a tree
+still costs many times its text, so documents are also bounded in size before
+parsing.
 """
 
 from xml.etree import ElementTree as ET
@@ -23,16 +27,16 @@ from xml.parsers import expat
 # each attribute a dictionary entry with two strings, and each distinct
 # qualified name a string holding its namespace name. Whatever a document's
 # shape, its tree needs at most several dozen times its size, so bounding the
-# document bounds the tree. Feeds run to hundreds of kilobytes; a document over
-# this size is refused before any parsing, and the largest tree an accepted
-# document builds stays within the collection worker's memory.
-# tests/test_parse_memory_budget.py measures the costliest shapes.
+# document bounds the tree. Feeds and diagrams run to hundreds of kilobytes; a
+# document over this size is refused before any parsing, and the largest tree
+# an accepted document builds stays within a worker's memory. A caller whose
+# own measurement allows more passes its bound as ``max_bytes``.
 MAX_DOCUMENT_BYTES = 2 * 1024 * 1024
-# The namespace names feeds declare run to about 80 characters. The bound is
-# in bytes: the larger of the size a name is stored at and its UTF-8 length.
-# A tree costs its number of distinct qualified names times what each is held
-# in, and any element can declare another namespace, so this bound and the
-# document bound together are what keep that product within the budget.
+# The namespace names these documents declare run to about 80 characters. The
+# bound is in bytes: the larger of the size a name is stored at and its UTF-8
+# length. A tree costs its number of distinct qualified names times what each
+# is held in, and any element can declare another namespace, so this bound and
+# the document bound together are what keep that product within the budget.
 MAX_NAMESPACE_NAME = 96
 
 
@@ -62,21 +66,47 @@ def _refuse_long_namespace_names(name: str, attributes: dict[str, str]) -> None:
                 )
 
 
-def parse_untrusted_xml(data: str | bytes) -> ET.Element:
+def _size(limit: int) -> str:
+    """A size bound as people read it: whole mebibytes, or bytes."""
+    mebibytes, rest = divmod(limit, 1024 * 1024)
+    return f"{mebibytes} MiB" if mebibytes and not rest else f"{limit:,} bytes"
+
+
+def _refuse_any_doctype(
+    name: str, system_id: str | None, public_id: str | None, has_internal_subset: bool
+) -> None:
+    raise ET.ParseError("XML documents with a document type declaration are refused")
+
+
+def _refuse_processing_instruction(target: str, data: str) -> None:
+    raise ET.ParseError("XML processing instructions are refused")
+
+
+def parse_untrusted_xml(
+    data: str | bytes, *, strict: bool = False, max_bytes: int = MAX_DOCUMENT_BYTES
+) -> ET.Element:
+    """Parse a document within the bounds above.
+
+    ``strict`` also refuses any document type declaration and any processing
+    instruction, such as ``<?xml-stylesheet?>``, for documents that are stored
+    and served as written. The XML declaration is not a processing instruction
+    and stays accepted.
+    """
     # The bound is on bytes. Text is measured as the UTF-8 the parser reads:
     # one character of text can be a whole element name, so a count of
     # characters admits more distinct names than the same count of bytes.
-    if len(data) > MAX_DOCUMENT_BYTES or (
-        isinstance(data, str)
-        and len(data.encode("utf-8", "surrogatepass")) > MAX_DOCUMENT_BYTES
+    if len(data) > max_bytes or (
+        isinstance(data, str) and len(data.encode("utf-8", "surrogatepass")) > max_bytes
     ):
-        raise ET.ParseError(
-            f"XML documents over {MAX_DOCUMENT_BYTES // (1024 * 1024)} MiB are refused"
-        )
+        raise ET.ParseError(f"XML documents over {_size(max_bytes)} are refused")
     # One pass that builds no tree and resolves no namespaces, so it holds no
     # qualified names; names are not kept between elements either.
     screen = expat.ParserCreate(intern=None)
-    screen.StartDoctypeDeclHandler = _refuse_internal_subset
+    screen.StartDoctypeDeclHandler = (
+        _refuse_any_doctype if strict else _refuse_internal_subset
+    )
+    if strict:
+        screen.ProcessingInstructionHandler = _refuse_processing_instruction
     screen.StartElementHandler = _refuse_long_namespace_names
     try:
         screen.Parse(data, True)

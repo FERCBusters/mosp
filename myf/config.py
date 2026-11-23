@@ -288,3 +288,7 @@ class MyfSettings(BaseSettings):
     # These are defense-in-depth; a reverse proxy should still enforce limits.
     login_rate_limit_window_seconds: int = Field(default=300)  # 5 minutes
     login_rate_limit_per_ip: int = Field(default=30)
+    # Password changes each account may attempt per login window, whatever
+    # address they come from, so a session holder cannot test many current
+    # passwords by spreading attempts across addresses.
+    password_change_rate_limit_per_account: int = Field(default=15)

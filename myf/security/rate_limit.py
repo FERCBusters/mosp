@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import ipaddress
+import math
+import time
 import unicodedata
+import uuid
 from typing import Tuple
 
 from redis import Redis
@@ -16,6 +19,7 @@ __all__ = [
     "fixed_window_allow",
     "fixed_window_spend",
     "login_name",
+    "sliding_window_allow",
 ]
 
 # Unicode Default_Ignorable_Code_Point ranges, plus the object replacement
@@ -48,6 +52,16 @@ def _ignorable(character: str) -> bool:
     if unicodedata.category(character) == "Cc" and not character.isspace():
         return True
     return any(low <= point <= high for low, high in _IGNORABLE)
+
+
+# Line breaks and control or format characters (bidirectional overrides among
+# them) make one name look like another, so no account name holds them.
+_UNPRINTED = frozenset({"Cc", "Cf", "Zl", "Zp"})
+
+
+def printable_name(username: str) -> bool:
+    """Whether a username holds no control, format or line-break character."""
+    return not any(unicodedata.category(c) in _UNPRINTED for c in username)
 
 
 def login_name(username: str) -> str:
@@ -195,6 +209,48 @@ def fixed_window_spend(
         if int(spent) > int(limit):
             return False, ttl_i
         return True, 0
+    except Exception:
+        if fail_closed:
+            return False, window_seconds
+        return True, 0
+
+
+def sliding_window_allow(
+    r: Redis,
+    key: str,
+    limit: int,
+    window_seconds: int,
+    *,
+    fail_closed: bool = True,
+    now: float | None = None,
+) -> Tuple[bool, int]:
+    """Admit at most ``limit`` attempts in any ``window_seconds``.
+
+    For costly work, where a fixed window's boundary would let twice the
+    limit through in quick succession. Each admitted attempt is kept, as a
+    member of a sorted set scored by its time, until it leaves the window. An
+    attempt is added and counted in one transaction; one that would pass the
+    limit is taken back and refused, with the wait until the oldest counted
+    attempt leaves. Attempts made together may each be refused where one
+    would have been admitted, never the other way round.
+    """
+    if limit <= 0 or window_seconds <= 0:
+        return True, 0
+    moment = time.time() if now is None else float(now)
+    member = uuid.uuid4().hex
+    try:
+        pipe = r.pipeline(transaction=True)
+        pipe.zremrangebyscore(key, "-inf", moment - window_seconds)
+        pipe.zadd(key, {member: moment})
+        pipe.zcard(key)
+        pipe.expire(key, int(window_seconds))
+        _, _, count, _ = pipe.execute()
+        if int(count) <= int(limit):
+            return True, 0
+        r.zrem(key, member)
+        oldest = r.zrange(key, 0, 0, withscores=True)
+        first = float(oldest[0][1]) if oldest else moment
+        return False, max(1, math.ceil(first + window_seconds - moment))
     except Exception:
         if fail_closed:
             return False, window_seconds

@@ -52,6 +52,8 @@ def test_a_zero_address_allowance_leaves_only_the_account_throttle(
 
 
 def _oidc_session(app, client, id_token):
+    # A provider session signs in only while its provider is enabled.
+    app.monkeypatch.setattr(settings, "oidc_enabled", True)
     sid = client.cookies.get(session_cookie_name())
     key = session_key(sid)
     payload = json.loads(app.store.get(key))

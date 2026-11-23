@@ -31,6 +31,7 @@ from myf.host.config import settings
 from myf.host.models import OidcLoginState, User, UserIdentity, UserSsoEmail
 from myf.security.encoding import digest
 from myf.security.sso_http import client_options
+from myf.security.urls import same_site_path
 
 TOKEN_ENDPOINT_AUTH_METHODS = ("client_secret_basic", "client_secret_post")
 
@@ -458,23 +459,7 @@ def set_sso_binding(response, request):
 
 
 def _normalize_next(next_url: str | None) -> str | None:
-    raw = (next_url or "").strip()
-    if not raw:
-        return None
-    path = raw.split("?", 1)[0].split("#", 1)[0]
-    # Browsers resolve dot segments, including percent-encoded ones, so a path
-    # such as /.//host would become the network-path reference //host.
-    if (
-        raw.startswith("/")
-        and not raw.startswith("//")
-        and "://" not in raw
-        and "\\" not in raw
-        and not any(ord(c) < 32 for c in raw)
-        and not any(code in path.lower() for code in ("%2e", "%2f", "%5c"))
-        and not any(segment in {".", ".."} for segment in path.split("/"))
-    ):
-        return raw
-    return None
+    return same_site_path(next_url)
 
 
 def _allowed_by_domain(provider: SsoProvider, claims: dict[str, Any]) -> bool:

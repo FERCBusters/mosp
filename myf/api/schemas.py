@@ -20,3 +20,10 @@ class LoginPayload(BaseModel):
         if not login_name(value):
             raise ValueError("Enter a username")
         return value
+
+
+class ChangePasswordPayload(BaseModel):
+    current_password: str = Field(max_length=1024)
+    # The password rules refuse a long new password with their own message;
+    # the request body limit bounds what is read.
+    new_password: str

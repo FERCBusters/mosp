@@ -280,7 +280,10 @@ class LocalMfaTests(unittest.TestCase):
             self.assertIs(
                 mfa.local_session_allowed(db, user, {"auth_method": "local"}), True
             )
-            with patch.object(settings, "mfa_policy", "all"):
+            with (
+                patch.object(settings, "mfa_policy", "all"),
+                patch.object(settings, "oidc_enabled", True),
+            ):
                 self.assertIs(
                     mfa.local_session_allowed(db, user, {"auth_method": "local"}),
                     False,

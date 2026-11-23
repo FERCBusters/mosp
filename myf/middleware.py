@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import time
 from typing import cast
+from urllib.parse import urlsplit, urlunsplit
 
 import anyio
 from fastapi import FastAPI, Request
@@ -50,12 +51,14 @@ from myf.security.route_policy import (
     UNSAFE_METHODS,
     admin_only,
     gated_write_permission,
+    is_admin_write,
     is_permission_checked_write,
     is_public_request,
     is_self_service_write,
     policy,
     policy_path,
     prefix_rule,
+    refuses_undeclared_writes,
 )
 
 log = logging.getLogger(__name__)
@@ -168,7 +171,7 @@ def authenticate(request: Request) -> JSONResponse | None:
         ensure_session_authorization_current(db, user)
         effective_role = user.effective_role or attach_effective_role(db, user)
 
-        if admin_only(path) and effective_role != ROLE_ADMIN:
+        if admin_only(request.method, path) and effective_role != ROLE_ADMIN:
             return JSONResponse({"detail": "Admin role required"}, status_code=403)
 
         # Default rule: only administrators change state, except for the
@@ -199,6 +202,14 @@ def _write_refusal(db, request: Request, user, effective_role) -> JSONResponse |
         if any(has_permission(db, user, code) for code in rule.permissions):
             return None
         return JSONResponse({"detail": rule.refusal()}, status_code=403)
+    if is_admin_write(request):
+        if effective_role == ROLE_ADMIN:
+            return None
+        return JSONResponse({"detail": "Admin role required"}, status_code=403)
+    if refuses_undeclared_writes():
+        return JSONResponse(
+            {"detail": "This route accepts no changes"}, status_code=403
+        )
     if effective_role != ROLE_ADMIN:
         return JSONResponse(
             {"detail": "Read-only users cannot perform write actions"},
@@ -272,6 +283,29 @@ async def audit_trail_middleware(request: Request, call_next):
             )
 
 
+def _referer_for_audit(value: str | None) -> str | None:
+    """The page a request came from, as the audit trail keeps it: its path
+    masked as the request's own is, its query redacted, without a fragment,
+    and any credential left in it redacted."""
+    text = (value or "").strip()
+    if not text:
+        return None
+    try:
+        parts = urlsplit(text)
+    except ValueError:
+        return None
+    kept = urlunsplit(
+        (
+            parts.scheme,
+            parts.netloc,
+            hooks.audit_path(parts.path),
+            redact_query_string(parts.query) or "",
+            "",
+        )
+    )
+    return redact_str(kept) or None
+
+
 def record_request(request: Request, path: str, status_code: int, dur_ms: int):
     user = getattr(request.state, "user", None)
     username = getattr(user, "username", None) if user else None
@@ -293,7 +327,7 @@ def record_request(request: Request, path: str, status_code: int, dur_ms: int):
         qs = qs[:4096]
 
     ua = (request.headers.get("user-agent") or "").strip() or None
-    ref = redact_str((request.headers.get("referer") or "").strip()) or None
+    ref = _referer_for_audit(request.headers.get("referer"))
 
     # Truncate potentially long strings for safety.
     if ua and len(ua) > 256:
@@ -305,7 +339,9 @@ def record_request(request: Request, path: str, status_code: int, dur_ms: int):
     # served without a trace.
     columns = AuditLog.__table__.c
     method = request.method[: cast(String, columns.method.type).length]
-    path = path[: cast(String, columns.path.type).length]
+    # The application masks what a path carries that grants access (a share
+    # link's token, say) before the path is kept.
+    path = hooks.audit_path(path)[: cast(String, columns.path.type).length]
 
     db = SessionLocal()
     try:

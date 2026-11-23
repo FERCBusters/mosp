@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from functools import partial
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from fastapi import Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
@@ -373,6 +373,17 @@ def oidc_logout_post(request: Request, db: Session = Depends(get_db)) -> Respons
     return _browser_logout_response(request, db)
 
 
+# Printable ASCII other than "%" stays as it is; anything else is
+# percent-encoded as UTF-8, so a directory or provider name outside Latin-1
+# cannot break the response, and a control character cannot end the header.
+_HEADER_SAFE = "".join(chr(c) for c in range(0x20, 0x7F) if chr(c) != "%")
+
+
+def header_username(username: str) -> str:
+    """A username as a response header value carries it."""
+    return quote(username, safe=_HEADER_SAFE)
+
+
 @router.get("/v1/auth/check")
 def auth_check(request: Request) -> Response:
     # Used by nginx auth_request to gate access to HTML pages.
@@ -385,7 +396,7 @@ def auth_check(request: Request) -> Response:
     # response (via $upstream_http_x_<name>_user / $upstream_http_x_<name>_role) for
     # logging/diagnostics. Admin gating in this codebase uses the /v1/auth/check-admin
     # status code, not these headers.
-    resp.headers[f"X-{host.title()}-User"] = user.username
+    resp.headers[f"X-{host.title()}-User"] = header_username(user.username)
     resp.headers[f"X-{host.title()}-Role"] = user.effective_role or user.role
     return resp
 
@@ -408,6 +419,6 @@ def auth_check_admin(request: Request) -> Response:
 
     resp = Response(status_code=204)
     # Optional metadata headers (see /v1/auth/check).
-    resp.headers[f"X-{host.title()}-User"] = user.username
+    resp.headers[f"X-{host.title()}-User"] = header_username(user.username)
     resp.headers[f"X-{host.title()}-Role"] = eff
     return resp

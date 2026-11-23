@@ -241,3 +241,29 @@ def test_the_application_writes_its_own_notices(mail, hook):
 
 def test_nothing_is_pending_for_an_account_never_written_to(db):
     assert security_notifications.pending_for(db, uuid.uuid4()) == 0
+
+
+def test_a_provider_session_lasts_only_while_the_provider_is_enabled(
+    production_client, monkeypatch
+):
+    client, redis, admin, reader = production_client
+
+    def signed_in(method):
+        sid = sessions.create_session(
+            redis, user_id=str(reader.id), ttl_seconds=300, auth_method=method
+        )
+        client.cookies.set(session_cookie_name(), sid)
+        return sid
+
+    monkeypatch.setattr(settings, "oidc_enabled", True)
+    signed_in("oidc")
+    assert client.get("/v1/auth/check").status_code == 204
+
+    monkeypatch.setattr(settings, "oidc_enabled", False)
+    assert client.get("/v1/auth/check").status_code == 401
+    # Turning the provider back on does not bring the session back.
+    monkeypatch.setattr(settings, "oidc_enabled", True)
+    assert client.get("/v1/auth/check").status_code == 401
+    # A method no provider answers to signs nobody in.
+    signed_in("retired-provider")
+    assert client.get("/v1/auth/check").status_code == 401

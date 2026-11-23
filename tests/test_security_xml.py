@@ -285,3 +285,37 @@ def test_a_document_over_the_size_bound_is_refused_before_parsing(monkeypatch):
     for document in (within + b" ", (within + b" ").decode(), wide):
         with pytest.raises(ET.ParseError, match="over 2 MiB are refused"):
             parse_untrusted_xml(document)
+
+
+@pytest.mark.parametrize(
+    "document,refusal",
+    [
+        (
+            '<!DOCTYPE svg SYSTEM "http://example.invalid/svg.dtd"><svg/>',
+            "document type declaration",
+        ),
+        ('<?xml-stylesheet href="https://example.invalid/x.xsl"?><svg/>', "processing"),
+        ("<svg><?php echo 1 ?></svg>", "processing"),
+    ],
+)
+def test_strict_parsing_refuses_declarations_and_instructions(document, refusal):
+    # Accepted by the ordinary boundary, refused where documents are served
+    # as written.
+    parse_untrusted_xml(document)
+    with pytest.raises(ET.ParseError, match=refusal):
+        parse_untrusted_xml(document, strict=True)
+    root = parse_untrusted_xml('<?xml version="1.0"?><svg/>', strict=True)
+    assert root.tag == "svg"
+
+
+def test_a_caller_may_set_its_own_size_bound():
+    document = "<a>" + "x" * (1024 * 1024) + "</a>"
+    assert parse_untrusted_xml(document).tag == "a"
+    with pytest.raises(ET.ParseError, match="over 1,024 bytes are refused"):
+        parse_untrusted_xml(document, max_bytes=1024)
+    with pytest.raises(ET.ParseError, match="over 1,024 bytes are refused"):
+        parse_untrusted_xml("<a>" + "é" * 600 + "</a>", max_bytes=1024)
+    with pytest.raises(ET.ParseError, match="over 3 MiB are refused"):
+        parse_untrusted_xml(
+            b"<a>" + b"x" * (3 * 1024 * 1024) + b"</a>", max_bytes=3 * 1024 * 1024
+        )

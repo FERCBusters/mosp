@@ -223,6 +223,39 @@ def test_transport_security_is_announced_only_for_secure_cookies(
     )
 
 
+def test_a_response_without_a_policy_of_its_own_runs_nothing(site):
+    response = site.client().get("/health")
+
+    assert response.headers["content-security-policy"] == (
+        "default-src 'none'; frame-ancestors 'none'; sandbox"
+    )
+    assert response.headers["cross-origin-resource-policy"] == "same-origin"
+
+
+def test_a_responses_own_policy_is_kept():
+    import asyncio
+
+    from myf.security.headers import SecurityHeadersMiddleware
+
+    async def app(scope, receive, send):
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-security-policy", b"default-src 'self'")],
+            }
+        )
+
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+
+    asyncio.run(SecurityHeadersMiddleware(app)({"type": "http"}, None, send))
+    policies = [v for k, v in sent[0]["headers"] if k == b"content-security-policy"]
+    assert policies == [b"default-src 'self'"]
+
+
 # -- the audit trail --------------------------------------------------------
 
 
@@ -536,3 +569,26 @@ def test_administrator_patterns_the_matcher_cannot_bound_are_refused(pattern, me
 )
 def test_collection_diagnostics_name_the_failure_without_its_text(error, message):
     assert collection_error(error) == message
+
+
+@pytest.mark.parametrize(
+    "username,carried",
+    [
+        ("alice", "alice"),
+        ("Ana María", "Ana Mar%C3%ADa"),
+        ("李雷", "%E6%9D%8E%E9%9B%B7"),
+        ("50%", "50%25"),
+    ],
+)
+def test_the_page_check_names_any_account_in_a_header_it_can_carry(
+    site, username, carried
+):
+    user = site.user(role="admin")
+    user.username = username
+    site.db.commit()
+    client = site.client(user)
+
+    for path in ("/v1/auth/check", "/v1/auth/check-admin"):
+        response = client.get(path)
+        assert response.status_code == 204
+        assert response.headers["x-testapp-user"] == carried

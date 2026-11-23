@@ -1,5 +1,7 @@
 """Roles, permission codes, group names, action records and request context."""
 
+import uuid
+
 import pytest
 from starlette.requests import Request
 
@@ -13,7 +15,7 @@ from tests.testapp.models import AuditLog, Group, Permission, User
 
 def _user(db, role="normal", **fields):
     user = User(
-        username=f"u-{role}-{len(db.new)}-{id(fields)}",
+        username=f"u-{role}-{uuid.uuid4().hex}",
         password_hash="unused",
         role=role,
         is_active=True,
@@ -191,3 +193,26 @@ def test_a_request_names_its_context_and_machine_credential():
     context = change_context(request)
     assert (context.method, context.path, context.actor) == ("POST", "/v1/hook", None)
     assert (context.user_agent, context.referer) == ("agent/1", "https://r")
+
+
+def test_authorisation_changes_reach_every_affected_session(db):
+    first, second, untouched = _user(db), _user(db), _user(db)
+    group = Group(name="moved", role=None)
+    db.add(group)
+    db.flush()
+    group.users.extend([first, second])
+    db.flush()
+
+    assert sorted(permissions.group_member_ids(db, group.id)) == sorted(
+        [first.id, second.id]
+    )
+    permissions.bump_authz_versions(
+        db, permissions.group_member_ids(db, group.id) + [None]
+    )
+    permissions.bump_authz_versions(db, [])
+    db.expire_all()
+    assert (first.authz_version, second.authz_version, untouched.authz_version) == (
+        1,
+        1,
+        0,
+    )

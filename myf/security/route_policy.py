@@ -109,8 +109,16 @@ class RoutePolicy:
     gated: RouteCodes = field(default_factory=RouteCodes)
     # Writes under a prefix that need one of a set of permissions.
     prefix_rules: tuple[PrefixRule, ...] = ()
-    # Namespaces only administrators reach, reads included.
+    # Namespaces only administrators reach, reads included, apart from the
+    # routes named in admin_exempt, which check a permission themselves.
     admin_prefixes: tuple[str, ...] = ()
+    admin_exempt: RouteSet = field(default_factory=RouteSet)
+    # Writes outside the admin namespaces that only administrators make.
+    admin_writes: RouteSet = field(default_factory=RouteSet)
+    # A write the policy names nowhere needs an administrator, unless this is
+    # set: then it is refused for everyone, so a route added without a
+    # decision about who may call it is closed rather than open.
+    refuse_undeclared_writes: bool = False
     # Paths whose requests the audit trail leaves out, and public reads it
     # leaves out (documents anyone may fetch at any rate).
     unaudited_paths: frozenset[str] = frozenset()
@@ -126,6 +134,11 @@ class RoutePolicy:
             gated=self.gated | other.gated,
             prefix_rules=self.prefix_rules + other.prefix_rules,
             admin_prefixes=self.admin_prefixes + other.admin_prefixes,
+            admin_exempt=self.admin_exempt | other.admin_exempt,
+            admin_writes=self.admin_writes | other.admin_writes,
+            refuse_undeclared_writes=(
+                self.refuse_undeclared_writes or other.refuse_undeclared_writes
+            ),
             unaudited_paths=self.unaudited_paths | other.unaudited_paths,
             unaudited_public_reads=self.unaudited_public_reads
             | other.unaudited_public_reads,
@@ -133,8 +146,9 @@ class RoutePolicy:
 
 
 # The routes myf serves (myf.api.routes): signing in and out, single sign-on,
-# second-factor ceremonies, and the account's own SSO addresses. Second-factor
-# routes validate a pending ceremony and the request's Origin themselves.
+# second-factor ceremonies, and the account's own password and SSO addresses.
+# Second-factor routes validate a pending ceremony and the request's Origin
+# themselves.
 MYF_POLICY = RoutePolicy(
     public=RouteSet(
         {
@@ -173,6 +187,7 @@ MYF_POLICY = RoutePolicy(
             UNSAFE_METHODS,
             (
                 "/v1/auth/logout",
+                "/v1/me/password",
                 "/v1/me/sso-emails/request",
                 "/v1/me/sso-emails/confirm",
                 "/v1/me/sso-emails/remove",
@@ -224,8 +239,23 @@ def is_self_service_write(request) -> bool:
     )
 
 
-def admin_only(path: str) -> bool:
-    return any(path.startswith(prefix) for prefix in policy().admin_prefixes)
+def is_admin_write(request) -> bool:
+    current = policy()
+    path = policy_path(request)
+    return current.admin_writes.matches(request.method, path) or admin_only(
+        request.method, path
+    )
+
+
+def refuses_undeclared_writes() -> bool:
+    return policy().refuse_undeclared_writes
+
+
+def admin_only(method: str, path: str) -> bool:
+    current = policy()
+    return any(
+        path.startswith(prefix) for prefix in current.admin_prefixes
+    ) and not current.admin_exempt.matches(method, path)
 
 
 def prefix_rule(path: str) -> PrefixRule | None:

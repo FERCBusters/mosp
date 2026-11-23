@@ -74,8 +74,19 @@ def permission_implications() -> dict[str, frozenset[str]]:
 DEFAULT_BODY_LIMIT = 2 * 1024 * 1024
 
 
+# myf's own routes take small bodies, whatever the application allows
+# elsewhere: credentials, and second-factor documents carrying certificates.
+CREDENTIAL_BODY_LIMIT = 16 * 1024
+SECOND_FACTOR_BODY_LIMIT = 256 * 1024
+
+
 def body_limit(path: str) -> int:
-    """The largest request body the application accepts on ``path``."""
+    """The largest request body accepted on ``path``: myf's limit for its own
+    sign-in, password and second-factor routes, the application's otherwise."""
+    if path in {"/v1/auth/login", "/v1/me/password"}:
+        return CREDENTIAL_BODY_LIMIT
+    if path.startswith("/v1/auth/mfa/"):
+        return SECOND_FACTOR_BODY_LIMIT
     hook = _hook("body_limit")
     return DEFAULT_BODY_LIMIT if hook is None else int(hook(path))
 
@@ -137,6 +148,15 @@ def inner_request_user(db: Any, request: Any) -> Any:
     NOT_INNER for an ordinary request (default: every request is ordinary)."""
     hook = _hook("inner_request_user")
     return NOT_INNER if hook is None else hook(db, request)
+
+
+def audit_path(path: str) -> str:
+    """A request path as the audit trail keeps it (default: as requested).
+
+    An application whose paths can carry a credential, such as a share link's
+    token, returns the path with it masked."""
+    hook = _hook("audit_path")
+    return path if hook is None else hook(path)
 
 
 def bootstrap_allowed() -> bool:

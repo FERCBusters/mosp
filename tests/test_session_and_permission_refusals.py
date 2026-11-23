@@ -232,13 +232,25 @@ def test_a_trusted_proxy_mapping_without_the_identity_header_names_no_one(
     assert _remote_user_from_headers({"REMOTE_USER": "alice"}, peer="192.0.2.1") is None
 
 
+CONTROL = "username cannot contain control or format characters"
+
+
 @pytest.mark.parametrize(
     "username,role,message",
     [
         ("   ", "normal", "username required"),
         ("new-account", "owner", "role must be 'admin', 'normal', or 'inherit'"),
+        ("two\nlines", "normal", CONTROL),
+        ("admin\u202egnp", "normal", CONTROL),
+        ("tab\there", "normal", CONTROL),
     ],
-    ids=["blank-username", "unknown-role"],
+    ids=[
+        "blank-username",
+        "unknown-role",
+        "line-break",
+        "bidirectional-override",
+        "tab",
+    ],
 )
 def test_an_account_needs_a_name_and_a_known_role(db, username, role, message):
     with pytest.raises(ValueError, match="^" + message + "$"):

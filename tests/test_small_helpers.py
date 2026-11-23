@@ -15,7 +15,7 @@ from myf.security import json_shape
 from myf.security.csv import spreadsheet_cell
 from myf.security.placeholders import is_placeholder
 from myf.security.provider_logging import suppress_provider_logs
-from myf.security.urls import external_url
+from myf.security.urls import external_url, same_site_path
 from myf.services import text
 from myf.services.errors import DomainError
 from myf.services.uploads import Upload, upload_size
@@ -52,6 +52,52 @@ def test_a_blank_link_is_no_link(value):
 def test_other_links_are_refused(value):
     with pytest.raises(ValueError, match="HTTP or HTTPS URL"):
         external_url(value)
+
+
+@pytest.mark.parametrize(
+    "value,stored",
+    [
+        ("/diagrams.html?x=1#y", "/diagrams.html?x=1#y"),
+        ("https://example.org/", "https://example.org/"),
+    ],
+)
+def test_a_link_may_be_a_path_on_this_site_where_the_caller_allows(value, stored):
+    assert external_url(value, allow_relative=True) == stored
+
+
+@pytest.mark.parametrize(
+    "value", ["/a", "//elsewhere.example/", "/.//elsewhere.example", "/%2e%2e/x"]
+)
+def test_only_absolute_links_are_kept_by_default_or_where_a_path_is_unsafe(value):
+    with pytest.raises(ValueError, match="HTTP or HTTPS URL"):
+        external_url(value)
+    if value != "/a":
+        with pytest.raises(ValueError):
+            external_url(value, allow_relative=True)
+
+
+@pytest.mark.parametrize(
+    "value,path",
+    [
+        ("/account.html?tab=1", "/account.html?tab=1"),
+        (" /x ", "/x"),
+        (None, None),
+        ("", None),
+        ("x", None),
+        ("//elsewhere.example", None),
+        ("/https://elsewhere.example", None),
+        ("/a\\b", None),
+        ("/a\x7fb", None),
+        ("/a\tb", None),
+        ("/%2F%2Felsewhere.example", None),
+        ("/%5Celsewhere.example", None),
+        ("/a/../b", None),
+        ("/./b", None),
+        ("/a?next=../b", "/a?next=../b"),
+    ],
+)
+def test_same_site_paths_cannot_become_another_sites(value, path):
+    assert same_site_path(value) == path
 
 
 # -- uploads ----------------------------------------------------------------

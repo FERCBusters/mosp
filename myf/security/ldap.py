@@ -30,6 +30,7 @@ from myf.host import hooks
 from myf.host.config import settings
 from myf.host.models import User, UserIdentity
 from myf.security import sign_in_throttle as throttle
+from myf.security.rate_limit import printable_name
 from myf.security.regex import scan_pattern
 
 log = logging.getLogger(__name__)
@@ -307,7 +308,11 @@ def authenticate_ldap(db, username, password, *, recognised: bool = False):
         return None
     # A new directory identity never inherits an existing local account or its privileges.
     name = "ldap:" + identity["username"]
-    if len(name) > 128 or db.query(User.id).filter_by(username=name).first():
+    if (
+        len(name) > 128
+        or not printable_name(name)
+        or db.query(User.id).filter_by(username=name).first()
+    ):
         name = "ldap:" + uuid.uuid4().hex
     user = User(
         username=name,

@@ -294,3 +294,38 @@ def test_an_oversized_security_key_response_is_refused_before_verification(
     assert _fresh(db, user).mfa_enabled is False
     (row,) = db.query(MfaChallenge).filter_by(user_id=user.id).all()
     assert "register" not in row.data
+
+
+def test_an_operator_reset_removes_every_factor_and_any_refusal(site):
+    from datetime import datetime
+
+    from tests.testapp.models import AuditLog
+
+    user = site.user()
+    user.mfa_enabled = True
+    user.mfa_totp_secret = "sealed"
+    user.mfa_totp_last_step = 7
+    user.mfa_code_failures = 5
+    user.mfa_code_failures_since = datetime(2026, 1, 1)
+    site.db.add(
+        MfaCredential(user_id=user.id, credential_id="key", public_key="k", name="key")
+    )
+    site.db.add(MfaRecoveryCode(user_id=user.id, code_hash="1" * 64))
+    site.db.flush()
+    before = user.mfa_version
+
+    mfa.operator_reset(site.db, user)
+    site.db.flush()
+
+    assert (user.mfa_enabled, user.mfa_totp_secret, user.mfa_totp_last_step) == (
+        False,
+        None,
+        -1,
+    )
+    assert (user.mfa_code_failures, user.mfa_code_failures_since) == (0, None)
+    assert user.mfa_version == before + 1
+    for model in (MfaCredential, MfaRecoveryCode, MfaChallenge):
+        assert site.db.query(model).filter_by(user_id=user.id).count() == 0
+    assert [
+        row.path for row in site.db.query(AuditLog).filter_by(username=user.username)
+    ] == ["/v1/auth/mfa/operator-reset"]

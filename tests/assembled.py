@@ -13,9 +13,11 @@ PASSWORD = "synthetic-password-for-tests"
 
 
 class Site:
-    def __init__(self, db, store):
+    def __init__(self, db, store, monkeypatch):
         self.db = db
         self.store = store
+        # Settings a test changes for the site are restored after it.
+        self.monkeypatch = monkeypatch
 
     @classmethod
     def serve(cls, db, store, monkeypatch):
@@ -42,7 +44,7 @@ class Site:
         monkeypatch.setattr(settings, "mfa_policy", "optional")
         monkeypatch.setattr(settings, "local_auth_enabled", True)
         try:
-            yield cls(db, store)
+            yield cls(db, store, monkeypatch)
         finally:
             app.dependency_overrides.clear()
 

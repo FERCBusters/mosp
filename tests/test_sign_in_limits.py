@@ -943,8 +943,8 @@ def test_a_browser_recognised_for_a_directory_account_is_not_for_its_local_names
 
 @pytest.mark.parametrize(
     "spelling",
-    ["Carol", "CAROL", "car\u200bol", "\uff43arol"],
-    ids=["case", "upper", "zero-width", "fullwidth"],
+    ["Carol", "CAROL", "\uff43arol"],
+    ids=["case", "upper", "fullwidth"],
 )
 def test_a_username_that_compares_equal_to_an_existing_one_is_refused(signin, spelling):
     # Limits and recognition are kept by compared name. Two accounts whose
@@ -963,9 +963,24 @@ def test_a_username_that_compares_equal_to_an_existing_one_is_refused(signin, sp
     )
     with pytest.raises(ValueError, match="^username already exists$"):
         create("carol")
+
     assert signin.db.query(User).filter(User.username.ilike("%arol%")).count() == 1
     # A name that only resembles it is a different name.
     create("carol2")
+
+
+def test_a_username_with_an_invisible_character_is_refused_before_any_comparison(
+    signin,
+):
+    # A zero-width space would make one name look like another, so no new
+    # account holds one.
+    with pytest.raises(ValueError) as refused:
+        auth.create_user(
+            signin.db, username="car\u200bol", password=PASSWORD, role="normal"
+        )
+    assert str(refused.value) == (
+        "username cannot contain control or format characters"
+    )
 
 
 def test_accounts_that_already_share_a_compared_name_keep_separate_limits(signin):

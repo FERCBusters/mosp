@@ -1,0 +1,189 @@
+name: Bump dependants
+
+# When myf CI passes on a push to main, proposes the new myf commit to each
+# application built on myf: its pyproject.toml pin and poetry.lock are updated
+# on an autobot/myf-* branch of that repository and offered in a pull request,
+# where the application's own CI runs. This workflow never approves or merges,
+# and an application that does not use myf yet is left alone.
+#
+# A GitHub App opens the pull requests, so they start the applications' CI.
+# Install an App on myf, keen, midena and ospmae with Contents and Pull
+# requests read and write access, then set this repository's variable
+# MYF_BUMP_APP_CLIENT_ID and secret MYF_BUMP_APP_PRIVATE_KEY.
+on:
+  workflow_run:
+    workflows: ["myf CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BASE_BRANCH: main
+  BRANCH_PREFIX: autobot/myf-
+  POETRY_VERSION: "2.4.1"
+
+jobs:
+  propose:
+    name: Propose to ${{ matrix.repository }}
+    if: >-
+      github.repository_owner == 'FERCBusters' && (
+        github.event_name == 'workflow_dispatch' || (
+          github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_repository.full_name == github.repository
+        )
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container:
+      image: docker.io/library/debian:13@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6
+    strategy:
+      fail-fast: false
+      matrix:
+        repository: [keen, midena, ospmae]
+    concurrency:
+      group: bump-dependants-${{ matrix.repository }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        shell: bash
+    env:
+      COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
+      TARGET: FERCBusters/${{ matrix.repository }}
+    steps:
+      - name: Install system dependencies
+        run: |
+          set -eu
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates curl git gh jq python3 python3-venv
+
+      - name: Check the GitHub App settings
+        env:
+          CLIENT_ID: ${{ vars.MYF_BUMP_APP_CLIENT_ID }}
+          HAS_KEY: ${{ secrets.MYF_BUMP_APP_PRIVATE_KEY != '' }}
+        run: |
+          if [ -z "$CLIENT_ID" ] || [ "$HAS_KEY" != true ]; then
+            echo "::error::MYF_BUMP_APP_CLIENT_ID or MYF_BUMP_APP_PRIVATE_KEY is missing. See the top of this workflow."
+            exit 1
+          fi
+
+      # One token, limited to the application and to myf, which the lock
+      # update fetches.
+      - name: Create GitHub App token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.MYF_BUMP_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MYF_BUMP_APP_PRIVATE_KEY }}
+          owner: FERCBusters
+          repositories: myf,${{ matrix.repository }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Checkout myf
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.COMMIT }}
+          path: myf
+          persist-credentials: false
+
+      - name: Checkout ${{ matrix.repository }}
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ${{ env.TARGET }}
+          ref: ${{ env.BASE_BRANCH }}
+          token: ${{ steps.app.outputs.token }}
+          path: target
+          persist-credentials: false
+
+      - name: Move the pin
+        id: pin
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/myf-bump"
+          python3 -I myf/tools/bump_pin.py target "$COMMIT" "$report"
+          cat "$report/outputs.txt" >> "$GITHUB_OUTPUT"
+
+      - name: Update the lock files
+        if: steps.pin.outputs.changed == 'true'
+        env:
+          TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          set -euo pipefail
+          python3 -m venv /opt/myf-bump-poetry
+          /opt/myf-bump-poetry/bin/python -m pip install "poetry==${POETRY_VERSION}"
+          # Poetry fetches myf with git, through the App token, which no file
+          # in either checkout keeps.
+          /opt/myf-bump-poetry/bin/poetry config system-git-client true
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="url.https://x-access-token:${TOKEN}@github.com/.insteadOf"
+          export GIT_CONFIG_VALUE_0="https://github.com/"
+          while IFS= read -r project; do
+            (cd "target/$project" && /opt/myf-bump-poetry/bin/poetry lock --no-interaction)
+          done < "$RUNNER_TEMP/myf-bump/projects.txt"
+
+      - name: Propose the new pin
+        if: steps.pin.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GH_REPO: ${{ env.TARGET }}
+        working-directory: target
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/myf-bump"
+          branch="${BRANCH_PREFIX}${COMMIT:0:12}"
+          git config --global --add safe.directory "$PWD"
+
+          # A pull request for exactly this commit already settles it,
+          # including one a maintainer closed.
+          existing=$(gh pr list --state all --head "$branch" --json number,state \
+            --jq 'first // empty | "\(.number) \(.state)"')
+          if [ -n "$existing" ]; then
+            read -r number state <<< "$existing"
+            echo "Pull request #$number ($state) already proposes this commit."
+            if [ "$state" != OPEN ]; then
+              exit 0
+            fi
+          else
+            # The commit is created through the API, so the job needs no git
+            # credentials and GitHub signs the commit.
+            entries="$RUNNER_TEMP/tree-entries.json"
+            git diff --name-only -z | while IFS= read -r -d '' path; do
+              mode=$(git ls-files --stage -- "$path" | cut -d' ' -f1)
+              jq -n --arg path "$path" --arg mode "$mode" --rawfile content "$path" \
+                '{path: $path, mode: $mode, type: "blob", content: $content}'
+            done | jq -s . > "$entries"
+            tree=$(jq -n --arg base "$(git rev-parse 'HEAD^{tree}')" \
+                --slurpfile entries "$entries" '{base_tree: $base, tree: $entries[0]}' \
+              | gh api "repos/$GH_REPO/git/trees" --input - --jq .sha)
+            commit=$(jq -n --arg tree "$tree" --arg parent "$(git rev-parse HEAD)" \
+                --rawfile message "$report/commit-message.txt" \
+                '{message: $message, tree: $tree, parents: [$parent]}' \
+              | gh api "repos/$GH_REPO/git/commits" --input - --jq .sha)
+            # A branch left by an interrupted run has no pull request yet.
+            if gh api "repos/$GH_REPO/git/ref/heads/$branch" --silent 2>/dev/null; then
+              gh api -X PATCH "repos/$GH_REPO/git/refs/heads/$branch" \
+                -f sha="$commit" -F force=true --silent
+            else
+              gh api "repos/$GH_REPO/git/refs" \
+                -f ref="refs/heads/$branch" -f sha="$commit" --silent
+            fi
+            url=$(gh pr create --base "$BASE_BRANCH" --head "$branch" \
+              --title "$(head -1 "$report/commit-message.txt")" \
+              --body-file "$report/pr-body.md")
+            number="${url##*/}"
+            echo "Opened $url for review."
+          fi
+
+          # An older myf commit's proposal is superseded by this one.
+          gh pr list --state open --limit 100 --json number,headRefName,author \
+            | jq -r --arg prefix "$BRANCH_PREFIX" --arg branch "$branch" \
+              '.[] | select(.author.is_bot and (.headRefName | startswith($prefix))
+                and .headRefName != $branch) | .number' \
+            | while read -r older; do
+                gh pr close "$older" --delete-branch --comment "Superseded by #$number."
+              done

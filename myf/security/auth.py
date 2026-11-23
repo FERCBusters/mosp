@@ -18,7 +18,7 @@ from myf.security.passwords import (
     needs_rehash,
     verify_password,
 )
-from myf.security.rate_limit import login_name
+from myf.security.rate_limit import login_name, printable_name
 from myf.security.sessions import delete_session, get_session
 
 ROLE_ADMIN = "admin"
@@ -266,6 +266,8 @@ def create_user(
     uname = (username or "").strip()
     if not uname:
         raise ValueError("username required")
+    if not printable_name(uname):
+        raise ValueError("username cannot contain control or format characters")
 
     r = (role or ROLE_NORMAL).strip() or ROLE_NORMAL
     if r not in (ROLE_ADMIN, ROLE_NORMAL, ROLE_INHERIT):
