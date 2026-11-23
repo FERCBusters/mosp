@@ -230,12 +230,12 @@ def test_the_application_writes_its_own_notices(mail, hook):
     db.flush()
 
     assert security_notifications.pending_for(db, user.id) == 2
-    standard, own = (
-        db.query(SecurityNotification).order_by(SecurityNotification.subject).all()
-    )
-    assert own.subject == "TestApp security: Your report was exported"
+    # Looked up by subject: how the database orders text depends on its
+    # collation.
+    notices = {n.subject: n for n in db.query(SecurityNotification).all()}
+    own = notices["TestApp security: Your report was exported"]
+    standard = notices["TestApp security: Your TestApp password was changed"]
     assert "IP address: 203.0.113.7" in own.body and "Ask if not you." in own.body
-    assert standard.subject == "TestApp security: Your TestApp password was changed"
     assert "Unavailable (operator action or unknown address)" in standard.body
 
 

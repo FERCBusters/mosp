@@ -51,7 +51,11 @@ myf reads the application's account models by name: `User`, `Group`, `Permission
 
 ## Development
 
-The suite runs against PostgreSQL, each test module in a schema of its own, with an in-memory Valkey:
+The suite runs against PostgreSQL, each test module in a schema of its own, with an in-memory Valkey. Create the database with the collation CI's PostgreSQL image uses, so text sorts as it does there:
+
+```bash
+createdb --template=template0 --encoding=UTF8 --lc-collate=en_US.UTF-8 --lc-ctype=en_US.UTF-8 --owner=myf_test myf_test
+```
 
 ```bash
 poetry install

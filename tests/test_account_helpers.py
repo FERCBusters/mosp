@@ -124,7 +124,8 @@ def test_an_action_is_recorded_with_bounded_redacted_context(db):
     record_action(db, ChangeContext(user_agent="  "), None, "thing.seen")
     db.flush()
 
-    made, seen = db.query(AuditLog).order_by(AuditLog.path).all()
+    rows = {row.path: row for row in db.query(AuditLog).all()}
+    made, seen = rows["/action/thing.made"], rows["/action/thing.seen"]
     assert (made.method, made.path, made.status_code) == (
         "ACTION",
         "/action/thing.made",
