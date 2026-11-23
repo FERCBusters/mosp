@@ -74,6 +74,15 @@ myf's own suite binds a small test application (`tests/testapp`) that assembles 
 
 When myf CI passes on a push to main, the bump workflow (`.github/workflows/bump-dependants.yml`) proposes the new commit to KEEN, MIDENA and OSPMAE: a pull request in each that uses myf moves its pin and lock file, and that application's CI decides it. The workflow needs a GitHub App installed on all four repositories (its header says which settings).
 
+myf's own suite covers every branch, so coverage cannot show code that no application uses. `tools/unused_by_apps.py` can: it follows each application's references to myf through myf's own calls, and lists what none of them reaches, what only one of them reaches, methods whose name nothing uses and hooks no application provides. Given coverage data from the applications' suites run with `--cov=myf` against the same checkout, it also lists reachable code none of them ran. Its findings are candidates to read, not to delete unread:
+
+```bash
+poetry run python tools/unused_by_apps.py --tests tests \
+  keen=../keen/services/api/app keen=../keen/services/api/scripts keen=../keen/services/api/alembic \
+  midena=../midena/services/api/app midena=../midena/services/api/scripts midena=../midena/services/api/alembic \
+  --coverage ../keen-myf.coverage --coverage ../midena-myf.coverage
+```
+
 `AGENTS.md` describes how to change myf safely; `SECURITY.md` describes how to report a vulnerability.
 
 ## Licence
