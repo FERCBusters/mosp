@@ -1,12 +1,12 @@
-# mosp
+# MOSP
 
 [![Coverage](https://github.com/FERCBusters/mosp/raw/badges/coverage.svg)](https://github.com/FERCBusters/mosp/actions/workflows/tests.yml?query=branch%3Amain)
 [![mypy](https://github.com/FERCBusters/mosp/raw/badges/mypy.svg)](https://github.com/FERCBusters/mosp/actions/workflows/tests.yml?query=branch%3Amain)
 [![ruff](https://github.com/FERCBusters/mosp/raw/badges/ruff.svg)](https://github.com/FERCBusters/mosp/actions/workflows/tests.yml?query=branch%3Amain)
 
-mosp ("My Framework") is the shared backend of KEEN, OSPMAE and MIDENA: the sign-in, session, single sign-on, second-factor, CSRF, role and permission machinery, the request middleware and the security primitives each of them runs on. It plays the part on the server that the MOSP Design System plays in the browser. An application built on mosp holds only its own routes, services, models, migrations, permission catalogue and middleware.
+MOSP is the shared backend of KEEN, OSPMAE and MIDENA: the sign-in, session, single sign-on, second-factor, CSRF, role and permission machinery, the request middleware and the security primitives each of them runs on. It plays the part on the server that the MOSP Design System plays in the browser. An application built on mosp holds only its own routes, services, models, migrations, permission catalogue and middleware.
 
-## What mosp provides
+## What MOSP provides
 
 - **Sign-in and sessions** (`mosp.security.auth`, `sessions`, `sign_in_throttle`, `mosp.services.login`, `mosp.api.routes.auth`): local passwords, LDAP and trusted remote-user sign-in; sessions stored in Valkey under the SHA-256 of their identifiers; `__Host-` cookies; the device-cookie sign-in throttle; account names free of control, format and line-break characters; the page checks nginx's `auth_request` reads, which name the account in a header (percent-encoded outside printable ASCII).
 - **The account's own password** (`mosp.services.account`, `mosp.api.routes.account`): `POST /v1/me/password`, limited per address and per account, ending the account's other sessions and every browser's recognition.
@@ -23,9 +23,9 @@ mosp ("My Framework") is the shared backend of KEEN, OSPMAE and MIDENA: the sign
 - **Mail and notices** (`mosp.services.mailer`, `security_notifications`): SMTP delivery, calendar invitations and the security notices sent to account owners.
 - **Worker** (`mosp.worker`, `mosp.services.audit_retention`, `housekeeping`): `mosp.worker.connect(celery_app, sql_trace=...)` gives each task its deadline and, when tracing, its statement labels; `audit_retention.remove_expired` keeps the audit trail to its retention period, and `housekeeping.remove_expired` removes expired sign-in states, second-factor challenges and SSO address proofs.
 
-## Using mosp in an application
+## Using MOSP in an application
 
-An application depends on mosp by commit, as it depends on the MOSP Design System:
+An application depends on MOSP by commit, just as it depends on the MOSP Design System:
 
 ```toml
 [tool.poetry.dependencies]
@@ -47,13 +47,13 @@ mosp.host.bind(
 )
 ```
 
-Its settings class subclasses `mosp.config.MospSettings`, sets its own `env_prefix` and adds its own fields; its own checks across fields go in an override of `check_application`, which ends by calling the base class's. Hooks (`mosp/host/hooks.py`) are where mosp asks the application to take part: its route policy, whether a session still stands, what happens when an account is created, dependencies every route takes, body and JSON limits per route, its permission implications, the tokens it issues for redaction, measured fields redaction keeps, its own security notices, the pages its browser interface serves, what its paths carry that the audit trail masks, and how it authenticates requests of its own (such as an MCP tool's). A hook an application leaves out keeps mosp's default.
+Its settings class subclasses `mosp.config.MospSettings`, sets its own `env_prefix` and adds its own fields; its own checks across fields go in an override of `check_application`, which ends by calling the base class's. Hooks (`mosp/host/hooks.py`) are where MOSP asks the application to take part: its route policy, whether a session still stands, what happens when an account is created, dependencies every route takes, body and JSON limits per route, its permission implications, the tokens it issues for redaction, measured fields redaction keeps, its own security notices, the pages its browser interface serves, what its paths carry that the audit trail masks, and how it authenticates requests of its own (such as an MCP tool's). A hook an application leaves out keeps MOSP's default.
 
-The application's `main` includes mosp's routers (`mosp.api.routes.account`, `auth`, `mfa`, `sso_emails`) beside its own, then calls `mosp.middleware.install(app)`; it creates its engine with `mosp.db.engine.application_engine` and connects its Celery app with `mosp.worker.connect`.
+The application's `main` includes MOSP's routers (`mosp.api.routes.account`, `auth`, `mfa`, `sso_emails`) beside its own, then calls `mosp.middleware.install(app)`; it creates its engine with `mosp.db.engine.application_engine` and connects its Celery app with `mosp.worker.connect`.
 
 ### Models
 
-mosp reads the application's account models by name: `User`, `Group`, `Permission`, `UserIdentity`, `OidcLoginState`, `MfaCredential`, `MfaRecoveryCode`, `MfaChallenge`, `UserLoginIP`, `SecurityNotification`, `UserSsoEmail`, `SsoEmailChallenge`, `AuditLog`, and the `user_groups`, `user_permissions` and `group_permissions` tables. `mosp.db.accounts` supplies a mixin for each model and `association_tables(metadata)` for the tables; an application declares `class User(Base, UserMixin)` and adds its own columns. The application owns these tables and their migrations. A user's `login_key` (the digest of the name sign-in compares, which finds an account's namesakes by an indexed read) is set whenever its username is assigned through the ORM; a migration or script that writes `users` rows directly sets it with `mosp.security.names.login_key`.
+MOSP reads the application's account models by name: `User`, `Group`, `Permission`, `UserIdentity`, `OidcLoginState`, `MfaCredential`, `MfaRecoveryCode`, `MfaChallenge`, `UserLoginIP`, `SecurityNotification`, `UserSsoEmail`, `SsoEmailChallenge`, `AuditLog`, and the `user_groups`, `user_permissions` and `group_permissions` tables. `mosp.db.accounts` supplies a mixin for each model and `association_tables(metadata)` for the tables; an application declares `class User(Base, UserMixin)` and adds its own columns. The application owns these tables and their migrations. A user's `login_key` (the digest of the name sign-in compares, which finds an account's namesakes by an indexed read) is set whenever its username is assigned through the ORM; a migration or script that writes `users` rows directly sets it with `mosp.security.names.login_key`.
 
 ## Development
 
@@ -70,11 +70,11 @@ poetry run pytest --cov=mosp --cov-branch --cov-fail-under=100
 poetry run ruff check . && poetry run ruff format --check . && poetry run mypy
 ```
 
-mosp's own suite binds a small test application (`tests/testapp`) that assembles mosp as an application does, with a few routes of its own for the route policy, and covers every branch of mosp: sign-in, sessions, second factors, single sign-on, directories, permissions, the middleware and the primitives. Each application's suite also runs mosp's flows through its own routes and hooks.
+MOSP's own suite binds a small test application (`tests/testapp`) that assembles MOSP as an application does, with a few routes of its own for the route policy, and covers every branch of MOSP: sign-in, sessions, second factors, single sign-on, directories, permissions, the middleware and the primitives. Each application's suite also runs MOSP's flows through its own routes and hooks.
 
-When mosp CI passes on a push to main, the bump workflow (`.github/workflows/bump-dependants.yml`) proposes the new commit to KEEN, MIDENA and OSPMAE: a pull request in each that uses mosp moves its pin and lock file, and that application's CI decides it. The workflow needs a GitHub App installed on all four repositories (its header says which settings).
+When MOSP CI passes on a push to main, the bump workflow (`.github/workflows/bump-dependants.yml`) proposes the new commit to KEEN, MIDENA and OSPMAE: a pull request in each that uses MOSP moves its pin and lock file, and that application's CI decides it. The workflow needs a GitHub App installed on all four repositories (its header says which settings).
 
-mosp's own suite covers every branch, so coverage cannot show code that no application uses. `tools/unused_by_apps.py` can: it follows each application's references to mosp through mosp's own calls, and lists what none of them reaches, what only one of them reaches, methods whose name nothing uses and hooks no application provides. Given coverage data from the applications' suites run with `--cov=mosp` against the same checkout, it also lists reachable code none of them ran. Its findings are candidates to read, not to delete unread:
+MOSP's own suite covers every branch, so coverage cannot show code that no application uses. `tools/unused_by_apps.py` can: it follows each application's references to MOSP through MOSP's own calls, and lists what none of them reaches, what only one of them reaches, methods whose name nothing uses and hooks no application provides. Given coverage data from the applications' suites run with `--cov=mosp` against the same checkout, it also lists reachable code none of them ran. Its findings are candidates to read, not to delete unread:
 
 ```bash
 poetry run python tools/unused_by_apps.py --tests tests \
@@ -83,7 +83,7 @@ poetry run python tools/unused_by_apps.py --tests tests \
   --coverage ../keen-mosp.coverage --coverage ../midena-mosp.coverage
 ```
 
-`AGENTS.md` describes how to change mosp safely; `SECURITY.md` describes how to report a vulnerability.
+`AGENTS.md` describes how to change MOSP safely; `SECURITY.md` describes how to report a vulnerability.
 
 ## Licence
 
