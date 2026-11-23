@@ -2,8 +2,8 @@
 
 import pytest
 
-from myf.security import sign_in_throttle as throttle
-from myf.services import account
+from mosp.security import sign_in_throttle as throttle
+from mosp.services import account
 from tests.assembled import BASE, PASSWORD, unsafe
 from tests.testapp.config import settings
 from tests.testapp.models import SecurityNotification, User

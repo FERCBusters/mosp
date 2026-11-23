@@ -12,8 +12,8 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from starlette.datastructures import Headers
 
-from myf.security import auth, sessions
-from myf.security.auth import cookie_name as session_cookie_name
+from mosp.security import auth, sessions
+from mosp.security.auth import cookie_name as session_cookie_name
 from tests.testapp.config import Settings, settings
 
 # Imported fixture: the production middleware with an in-memory session store.

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Move an application's myf dependency to a myf commit.
+"""Move an application's mosp dependency to a mosp commit.
 
 Usage: bump_pin.py CHECKOUT COMMIT REPORT_DIR
 
-Every pyproject.toml under CHECKOUT that declares myf as a git dependency of
-FERCBusters/myf has its ``rev`` set to COMMIT (a full commit hash). The tool
+Every pyproject.toml under CHECKOUT that declares mosp as a git dependency of
+FERCBusters/mosp has its ``rev`` set to COMMIT (a full commit hash). The tool
 writes to REPORT_DIR, for the workflow that proposes the change:
 
 - outputs.txt: ``changed=true|false`` and ``previous=<rev>`` (the first pin
@@ -13,7 +13,7 @@ writes to REPORT_DIR, for the workflow that proposes the change:
   CHECKOUT, for ``poetry lock`` to run in;
 - commit-message.txt and pr-body.md: the proposal's text.
 
-An application that does not use myf yet, or already pins COMMIT, is left
+An application that does not use mosp yet, or already pins COMMIT, is left
 unchanged.
 """
 
@@ -21,10 +21,10 @@ import re
 import sys
 from pathlib import Path
 
-# The line declaring myf in [tool.poetry.dependencies]: an inline table naming
-# the myf repository and a rev.
+# The line declaring mosp in [tool.poetry.dependencies]: an inline table naming
+# the mosp repository and a rev.
 _PIN = re.compile(
-    r'^(?P<head>myf\s*=\s*\{[^}\n]*git\s*=\s*"https://github\.com/FERCBusters/myf'
+    r'^(?P<head>mosp\s*=\s*\{[^}\n]*git\s*=\s*"https://github\.com/FERCBusters/mosp'
     r'(?:\.git)?"[^}\n]*rev\s*=\s*")(?P<rev>[^"\n]*)(?P<tail>"[^}\n]*\})',
     re.MULTILINE,
 )
@@ -33,7 +33,7 @@ _SKIPPED = {".git", ".venv", "node_modules"}
 
 
 def projects(checkout: Path) -> list[Path]:
-    """Every pyproject.toml under checkout that pins myf, in path order."""
+    """Every pyproject.toml under checkout that pins mosp, in path order."""
     found = []
     for path in sorted(checkout.rglob("pyproject.toml")):
         if _SKIPPED.intersection(path.relative_to(checkout).parts):
@@ -44,7 +44,7 @@ def projects(checkout: Path) -> list[Path]:
 
 
 def bump(checkout: Path, commit: str) -> tuple[list[Path], str]:
-    """Pin myf at commit; the projects changed and the first earlier pin."""
+    """Pin mosp at commit; the projects changed and the first earlier pin."""
     if not _COMMIT.fullmatch(commit):
         raise ValueError("commit must be a full lowercase commit hash")
     changed, previous = [], ""
@@ -71,20 +71,20 @@ def report(changed: list[Path], previous: str, commit: str, out: Path) -> None:
     (out / "projects.txt").write_text("".join(f"{p.as_posix()}\n" for p in changed))
     short = commit[:12]
     (out / "commit-message.txt").write_text(
-        f"Move myf to {short}\n\nPins myf at FERCBusters/myf@{commit} and "
+        f"Move mosp to {short}\n\nPins mosp at FERCBusters/mosp@{commit} and "
         "updates the lock file.\n"
     )
     compare = (
-        f"https://github.com/FERCBusters/myf/compare/{previous}...{commit}"
+        f"https://github.com/FERCBusters/mosp/compare/{previous}...{commit}"
         if _COMMIT.fullmatch(previous)
-        else f"https://github.com/FERCBusters/myf/commit/{commit}"
+        else f"https://github.com/FERCBusters/mosp/commit/{commit}"
     )
     listed = "".join(f"- `{p.as_posix()}`\n" for p in changed)
     (out / "pr-body.md").write_text(
-        f"Moves myf to FERCBusters/myf@{commit}, the head of myf's main branch "
-        f"after its CI passed.\n\nChanges in myf: {compare}\n\n"
+        f"Moves mosp to FERCBusters/mosp@{commit}, the head of mosp's main branch "
+        f"after its CI passed.\n\nChanges in mosp: {compare}\n\n"
         f"Projects updated (pyproject.toml and poetry.lock):\n\n{listed}\n"
-        "This pull request was opened by myf's bump workflow. It never merges "
+        "This pull request was opened by mosp's bump workflow. It never merges "
         "itself: this repository's CI runs on it, and a maintainer reviews and "
         "merges it.\n"
     )

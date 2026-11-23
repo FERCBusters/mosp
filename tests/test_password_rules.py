@@ -11,7 +11,7 @@ from unittest.mock import Mock
 import pytest
 from pydantic import ValidationError
 
-from myf.security import auth, encoding, passwords
+from mosp.security import auth, encoding, passwords
 
 # Imported fixture: the assembled application with an in-memory session store.
 from tests.assembled import BASE, PASSWORD

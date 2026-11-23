@@ -4,14 +4,14 @@ from unittest.mock import Mock
 
 import pytest
 
-from myf.security import passwords, permissions
-from myf.security.permissions import (
+from mosp.security import passwords, permissions
+from mosp.security.permissions import (
     ensure_session_authorization_current,
     get_effective_permission_codes,
     has_any_permission,
     has_permission,
 )
-from myf.security.roles import compute_effective_role, count_effective_admins
+from mosp.security.roles import compute_effective_role, count_effective_admins
 from tests.testapp.models import (
     Group,
     Permission,

@@ -10,9 +10,9 @@ import httpx2 as httpx
 import pytest
 from celery.exceptions import SoftTimeLimitExceeded, TimeLimitExceeded
 
-from myf.core import datetime_utils as dt
-from myf.core import task_deadline
-from myf.security.errors import collection_error
+from mosp.core import datetime_utils as dt
+from mosp.core import task_deadline
+from mosp.security.errors import collection_error
 
 # -- dates and times ----------------------------------------------------------
 
@@ -149,7 +149,7 @@ def test_a_deadline_that_passed_during_the_failure_ends_the_run(task):
 def test_the_engine_runs_no_statement_past_the_deadline(task):
     from sqlalchemy import text
 
-    from myf.db.engine import application_engine
+    from mosp.db.engine import application_engine
     from tests.testapp.config import settings
 
     engine = application_engine(settings.database_url)
@@ -171,8 +171,8 @@ def test_the_engine_runs_no_statement_past_the_deadline(task):
 def test_the_engine_labels_statements_only_when_tracing(task):
     from sqlalchemy import event, text
 
-    from myf.db import sql_trace
-    from myf.db.engine import application_engine
+    from mosp.db import sql_trace
+    from mosp.db.engine import application_engine
     from tests.testapp.config import settings
 
     for tracing, labelled in ((False, False), (True, True)):

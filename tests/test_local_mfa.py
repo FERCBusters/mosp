@@ -26,16 +26,16 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-import myf.api.context as api_context
-import myf.services.login as login_operations
-import myf.services.mfa_management as mfa_operations
-from myf.api.routes import auth as login_routes
-from myf.api.routes import mfa as routes
-from myf.security import auth as identity
-from myf.security import encoding, mfa
-from myf.security.auth import cookie_name as session_cookie_name
-from myf.security.passwords import hash_password
-from myf.security.sessions import create_session
+import mosp.api.context as api_context
+import mosp.services.login as login_operations
+import mosp.services.mfa_management as mfa_operations
+from mosp.api.routes import auth as login_routes
+from mosp.api.routes import mfa as routes
+from mosp.security import auth as identity
+from mosp.security import encoding, mfa
+from mosp.security.auth import cookie_name as session_cookie_name
+from mosp.security.passwords import hash_password
+from mosp.security.sessions import create_session
 
 # Imported fixture: the assembled application with an in-memory session store.
 from tests.assembled import BASE, PASSWORD
@@ -70,7 +70,7 @@ def outcome(response):
 class LocalMfaTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        url = required_database_url("MYF_TEST_DATABASE_URL")
+        url = required_database_url("MOSP_TEST_DATABASE_URL")
         cls.engine = create_engine(url, connect_args={"options": "-c timezone=UTC"})
         cls.schema = "test_mfa_" + uuid.uuid4().hex
         with cls.engine.begin() as conn:
@@ -460,13 +460,13 @@ class LocalMfaTests(unittest.TestCase):
         self.assertEqual(outcome(self.post("state")), EXPIRED)
 
     def test_full_application_middleware_boundary(self):
-        from myf import middleware as myf_middleware
+        from mosp import middleware as mosp_middleware
         from tests.testapp import main
 
         main.app.dependency_overrides[get_db] = self.app.dependency_overrides[get_db]
         self.addCleanup(main.app.dependency_overrides.clear)
         with (
-            patch.object(myf_middleware, "SessionLocal", self.Session),
+            patch.object(mosp_middleware, "SessionLocal", self.Session),
             patch.object(settings, "mfa_policy", "all"),
         ):
             client = TestClient(
@@ -504,7 +504,7 @@ class LocalMfaTests(unittest.TestCase):
             )
 
     def test_security_mail_login_once_per_ip_after_full_mfa(self):
-        from myf.services import security_notifications as mail
+        from mosp.services import security_notifications as mail
         from tests.testapp.models import SecurityNotification, UserLoginIP
 
         with self.Session() as db:
@@ -551,7 +551,7 @@ class LocalMfaTests(unittest.TestCase):
                 )
 
     def test_security_mail_smtp_failure_retries_then_stops(self):
-        from myf.services import security_notifications as mail
+        from mosp.services import security_notifications as mail
         from tests.testapp.models import SecurityNotification
 
         with self.Session() as db:
@@ -582,7 +582,7 @@ class LocalMfaTests(unittest.TestCase):
             self.assertEqual(row.last_error, "RuntimeError")
 
     def test_security_mail_transaction_and_missing_smtp(self):
-        from myf.services import security_notifications as mail
+        from mosp.services import security_notifications as mail
         from tests.testapp.models import SecurityNotification
 
         with self.Session() as db:
@@ -603,7 +603,7 @@ class LocalMfaTests(unittest.TestCase):
             )
 
     def test_security_mail_delivery(self):
-        from myf.services import security_notifications as mail
+        from mosp.services import security_notifications as mail
         from tests.testapp.models import SecurityNotification
 
         with self.Session() as db:
@@ -921,7 +921,7 @@ def test_local_mfa_needs_an_https_public_origin():
 @pytest.fixture
 def ceremony(site, monkeypatch):
     """An enrolled TOTP account whose sign-ins stop at the second factor."""
-    from myf.services import security_notifications
+    from mosp.services import security_notifications
 
     key = Fernet.generate_key()
     monkeypatch.setattr(settings, "mfa_encryption_key", key.decode())

@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from myf.services import mailer
+from mosp.services import mailer
 from tests.testapp.config import settings
 
 

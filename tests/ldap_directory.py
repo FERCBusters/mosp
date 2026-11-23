@@ -6,7 +6,7 @@ import fakeredis
 import pytest
 from ldap3.operation.bind import bind_operation
 
-from myf.security import ldap
+from mosp.security import ldap
 from tests.testapp.config import settings
 
 

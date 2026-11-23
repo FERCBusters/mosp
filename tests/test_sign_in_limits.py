@@ -1,6 +1,6 @@
 """Password sign-in limits and equal-cost failures through the assembled application.
 
-The sign-in throttle (myf/security/sign_in_throttle.py, shared with OSPMAE)
+The sign-in throttle (mosp/security/sign_in_throttle.py, shared with OSPMAE)
 hears a browser that has proved an account's password whatever an attacker
 does elsewhere; every other browser draws on a per-address allowance and the
 account's growing waits, decided before any password is verified, and the
@@ -15,11 +15,11 @@ from urllib.parse import parse_qs
 import pytest
 import sqlalchemy
 
-from myf.api.routes import auth as auth_routes
-from myf.security import auth, encoding
-from myf.security import sign_in_throttle as throttle
-from myf.security.auth import cookie_name as session_cookie_name
-from myf.security.names import login_name
+from mosp.api.routes import auth as auth_routes
+from mosp.security import auth, encoding
+from mosp.security import sign_in_throttle as throttle
+from mosp.security.auth import cookie_name as session_cookie_name
+from mosp.security.names import login_name
 
 # Imported fixtures: the assembled application with an in-memory session store,
 # and a fake directory server.
@@ -735,7 +735,7 @@ def test_sign_in_attempts_are_audited_without_unmatched_usernames(signin):
 def _deactivate_after_the_password_is_checked(monkeypatch, change):
     """Run ``change(db, account)`` once the password is proven and before the
     session is issued, as an administrator's request arriving then would."""
-    from myf.api.routes import auth as auth_routes
+    from mosp.api.routes import auth as auth_routes
 
     check = auth_routes.login_service.authenticate_password
 
@@ -1153,7 +1153,7 @@ def test_accounts_that_already_share_a_compared_name_keep_separate_limits(signin
     # did. Each is still one account: the holder of one is not recognised for
     # the other, wrong passwords count against the account they name, and a
     # correct sign-in to one leaves the other's count alone.
-    from myf.services.login import sign_in_key
+    from mosp.services.login import sign_in_key
 
     dana, other = signin.user(), signin.user()
     dana.username, other.username = "legacy-Dana", "legacy-dana"
@@ -1197,7 +1197,7 @@ def test_a_sign_in_key_costs_one_indexed_read_whether_or_not_the_name_exists(
     # grow with the number of accounts or differ for a name that exists.
     from sqlalchemy import event
 
-    from myf.services.login import sign_in_key
+    from mosp.services.login import sign_in_key
 
     existing = signin.user()
     for _ in range(3):
@@ -1225,7 +1225,7 @@ def test_a_sign_in_key_costs_one_indexed_read_whether_or_not_the_name_exists(
 
 
 def test_an_account_keeps_the_key_of_the_name_it_is_given(signin):
-    from myf.security.names import login_key
+    from mosp.security.names import login_key
 
     account = User(username="Fiona", password_hash="!", role="normal")
     assert account.login_key == login_key("fiona")
@@ -1263,7 +1263,7 @@ def test_a_browser_recognised_for_a_directory_entry_is_not_for_a_namesake_entry(
     # entry's limits only: its guesses at the other entry count against it.
     from types import SimpleNamespace
 
-    from myf.security import ldap
+    from mosp.security import ldap
 
     monkeypatch.setattr(settings, "ldap_enabled", True)
     state, _, _ = directory

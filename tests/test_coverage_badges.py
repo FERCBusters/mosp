@@ -1,4 +1,4 @@
-"""The README badges: coverage, mypy and ruff, rendered from myf CI's reports.
+"""The README badges: coverage, mypy and ruff, rendered from mosp CI's reports.
 
 tools/coverage_badges.py reads the reports from a downloaded CI artifact, so
 these tests build such a directory and check what each badge says, and hold
@@ -67,8 +67,8 @@ def test_lower_coverage_is_shown_in_warmer_colours(tmp_path, percent, colour):
 
 def test_findings_are_counted_and_shown_as_failing(tmp_path):
     mypy = (
-        "myf/a.py:3: error: Incompatible return value type  [return-value]\n"
-        "myf/b.py:9: error: Name 'x' is not defined  [name-defined]\n"
+        "mosp/a.py:3: error: Incompatible return value type  [return-value]\n"
+        "mosp/b.py:9: error: Name 'x' is not defined  [name-defined]\n"
         "Found 2 errors in 2 files (checked 73 source files)\n"
     )
     ruff = json.dumps([{"code": "F401"}])
@@ -87,14 +87,14 @@ def test_findings_are_counted_and_shown_as_failing(tmp_path):
     ],
 )
 def test_the_mypy_count_comes_from_its_summary_line(summary, errors):
-    assert badges.mypy_errors("myf/x.py:1: note: detail\n" + summary + "\n\n") == errors
+    assert badges.mypy_errors("mosp/x.py:1: note: detail\n" + summary + "\n\n") == errors
 
 
 @pytest.mark.parametrize(
     "reports,refusal",
     [
         ({"mypy": ""}, "without a summary"),
-        ({"mypy": "myf/x.py:1: error: boom  [misc]\n"}, "without a summary"),
+        ({"mypy": "mosp/x.py:1: error: boom  [misc]\n"}, "without a summary"),
         ({"ruff": '{"findings": []}'}, "not a list"),
         ({"coverage": "100"}, "not a number"),
         ({"coverage": True}, "not a number"),
@@ -123,10 +123,10 @@ def test_ci_writes_the_reports_the_badges_read():
     assert "--output-file test-results/ruff-findings.json" in workflow
     assert "poetry run mypy | tee test-results/mypy-report.txt" in workflow
     assert "--cov-report=json:test-results/coverage.json" in workflow
-    assert "name: myf-test-results" in workflow
+    assert "name: mosp-test-results" in workflow
     # The type check's pipe keeps mypy's exit status.
     types = workflow.split("- name: Check Python types", 1)[1].split("- name:", 1)[0]
     assert "set -o pipefail" in types
     publish = (ROOT / ".github" / "workflows" / "coverage-badges.yml").read_text()
-    assert 'workflows: ["myf CI"]' in publish
-    assert "name: myf-test-results" in publish
+    assert 'workflows: ["mosp CI"]' in publish
+    assert "name: mosp-test-results" in publish

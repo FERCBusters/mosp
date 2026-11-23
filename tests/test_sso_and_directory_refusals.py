@@ -17,9 +17,9 @@ from fastapi import HTTPException
 from sqlalchemy import insert
 from sqlalchemy.exc import OperationalError
 
-from myf.core.datetime_utils import utc_now_naive
-from myf.security import ldap, oidc
-from myf.security.sso_http import MAX_RESPONSE_BYTES, SsoTransport
+from mosp.core.datetime_utils import utc_now_naive
+from mosp.security import ldap, oidc
+from mosp.security.sso_http import MAX_RESPONSE_BYTES, SsoTransport
 from tests.ldap_directory import directory  # noqa: F401 - fixture
 from tests.test_sso_sign_in_flows import (  # noqa: F401 - fixtures
     ISSUER,

@@ -16,10 +16,10 @@ import pytest
 from cryptography.fernet import Fernet
 from sqlalchemy import event, update
 
-import myf.services.mfa_management as mfa_operations
-from myf.security import encoding, mfa
-from myf.security.auth import cookie_name as session_cookie_name
-from myf.security.passwords import hash_password
+import mosp.services.mfa_management as mfa_operations
+from mosp.security import encoding, mfa
+from mosp.security.auth import cookie_name as session_cookie_name
+from mosp.security.passwords import hash_password
 from tests.assembled import BASE, PASSWORD
 from tests.test_local_mfa import ceremony as ceremony  # noqa: F401 - fixture
 from tests.testapp.config import settings

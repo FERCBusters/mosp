@@ -1,19 +1,19 @@
-"""The test application assembled as an application assembles myf: its
+"""The test application assembled as an application assembles mosp: its
 routes, middleware and error contract, plus a few routes of its own that
 exercise the route policy."""
 
 from fastapi import Depends, FastAPI, Request, WebSocket
 from fastapi.exceptions import RequestValidationError
 
-from myf import middleware
-from myf.api.errors import domain_error_response, validation_error_response
-from myf.api.routes import account, auth, mfa, sso_emails
-from myf.api.routing import Router
-from myf.realtime import sockets
-from myf.security.auth import require_admin
-from myf.security.headers import SecurityHeadersMiddleware
-from myf.security.request_limits import RequestBodyLimitMiddleware
-from myf.services.errors import DomainError
+from mosp import middleware
+from mosp.api.errors import domain_error_response, validation_error_response
+from mosp.api.routes import account, auth, mfa, sso_emails
+from mosp.api.routing import Router
+from mosp.realtime import sockets
+from mosp.security.auth import require_admin
+from mosp.security.headers import SecurityHeadersMiddleware
+from mosp.security.request_limits import RequestBodyLimitMiddleware
+from mosp.services.errors import DomainError
 
 own = Router()
 

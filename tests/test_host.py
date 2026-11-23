@@ -1,7 +1,7 @@
 import pytest
 
-from myf import host
-from myf.host import hooks
+from mosp import host
+from mosp.host import hooks
 
 
 def test_the_bound_application_names_its_keys_messages_and_settings():
@@ -14,13 +14,13 @@ def test_a_role_cannot_be_rebound_to_another_module():
         host.bind(name="testapp", title="TestApp", config="other.config")
     with pytest.raises(RuntimeError, match="already"):
         host.bind(name="other", title="TestApp")
-    with pytest.raises(ValueError, match="Unknown myf host roles"):
+    with pytest.raises(ValueError, match="Unknown mosp host roles"):
         host.bind(name="testapp", title="TestApp", storage="x")
 
 
 def test_an_unbound_role_says_how_to_bind_it(monkeypatch):
     monkeypatch.delitem(host._bound, "db")
-    with pytest.raises(RuntimeError, match=r"No application is bound to myf's 'db'"):
+    with pytest.raises(RuntimeError, match=r"No application is bound to mosp's 'db'"):
         host.module("db")
 
 
@@ -34,7 +34,7 @@ def test_hooks_an_application_leaves_out_keep_their_defaults(monkeypatch):
     assert hooks.permission_implications() == {}
     assert hooks.origin_required() is False
     assert hooks.body_limit("/anything") == hooks.DEFAULT_BODY_LIMIT
-    # myf's own routes keep their limits whatever the application says.
+    # mosp's own routes keep their limits whatever the application says.
     assert hooks.body_limit("/v1/auth/login") == 16 * 1024
     assert hooks.body_limit("/v1/me/password") == 16 * 1024
     assert hooks.body_limit("/v1/auth/mfa/webauthn/register") == 256 * 1024
@@ -72,7 +72,7 @@ def test_an_application_hook_replaces_the_default(hook):
 
 
 def test_an_application_name_is_a_lower_case_identifier():
-    from myf.host import _identity
+    from mosp.host import _identity
 
     saved = dict(_identity)
     _identity.clear()

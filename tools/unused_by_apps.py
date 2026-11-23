@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Find the parts of myf that no application built on it uses.
+"""Find the parts of mosp that no application built on it uses.
 
-Usage: unused_by_apps.py [--myf DIR] [--tests DIR] [--coverage FILE ...]
+Usage: unused_by_apps.py [--mosp DIR] [--tests DIR] [--coverage FILE ...]
                          [NAME=]APP_SOURCE [[NAME=]APP_SOURCE ...]
 
-myf is reached only through the applications built on it, so code none of
-them can reach is dead even when myf's own tests exercise it. Each
+mosp is reached only through the applications built on it, so code none of
+them can reach is dead even when mosp's own tests exercise it. Each
 APP_SOURCE is a source tree of an application (KEEN's services/api/app, its
 scripts and its migrations, say); trees given the same NAME are one
 application. An application's tests are better left out: what only they use
@@ -13,26 +13,26 @@ is not used.
 
 Two signals, each narrowing the other:
 
-- Reachability. Every module-level function, class and constant in myf is a
-  node. A node's edges are the myf names its body refers to, through any
+- Reachability. Every module-level function, class and constant in mosp is a
+  node. A node's edges are the mosp names its body refers to, through any
   import or module alias, re-exports followed to the definition. The roots are
-  every myf name the applications refer to, and the module-level code of every
+  every mosp name the applications refer to, and the module-level code of every
   module that is reached, since importing a module runs it. A function
   registered by a decorator (a route on a router, an event listener) is
   reached once what it is registered with is. A class is one node: its
   methods are reached with it. What the roots never reach is unused.
 - Execution. Given coverage data files from the applications' test suites,
-  run with ``--cov=myf`` against the same myf checkout, a reachable function
+  run with ``--cov=mosp`` against the same mosp checkout, a reachable function
   that none of them ran is listed too: reachable in principle, never run by
   any application's tests.
 
-Each unused name says whether myf's own tests (``--tests``) refer to it, so a
+Each unused name says whether mosp's own tests (``--tests``) refer to it, so a
 name kept alive only by its tests stands out. With more than one
 application, the names only one of them reaches are listed under it: shared
 code one application alone uses may belong in that application. Nothing is changed: the report
-is a list of candidates to read, not to delete blindly. Names myf calls by
+is a list of candidates to read, not to delete blindly. Names mosp calls by
 string (the application's hooks, settings and models) belong to the
-applications and are not myf's nodes.
+applications and are not mosp's nodes.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
-PACKAGE = "myf"
+PACKAGE = "mosp"
 
 
 @dataclass
@@ -75,7 +75,7 @@ def _absolute(module: str, is_package: bool, node: ast.ImportFrom) -> str:
 
 
 class Index:
-    """myf's modules and their top-level definitions."""
+    """mosp's modules and their top-level definitions."""
 
     def __init__(self, root: Path):
         self.root = root
@@ -94,7 +94,7 @@ class Index:
                 module.names.setdefault(defined, ("symbol", f"{module.name}:{defined}"))
 
     def resolve(self, module: str, name: str, seen=None) -> tuple[str, str] | None:
-        """What ``name`` in myf module ``module`` names, re-exports followed."""
+        """What ``name`` in mosp module ``module`` names, re-exports followed."""
         if f"{module}.{name}" in self.modules:
             return ("module", f"{module}.{name}")
         target = self.modules.get(module)
@@ -114,9 +114,9 @@ class Index:
         return found
 
     def import_names(self, module, path, tree, only=None):
-        """The myf modules and names a file imports, under their local names.
+        """The mosp modules and names a file imports, under their local names.
 
-        Imports anywhere in the file count, function bodies included: myf
+        Imports anywhere in the file count, function bodies included: mosp
         imports some names where they are used, to avoid import cycles.
         """
         is_package = path.name == "__init__.py"
@@ -183,7 +183,7 @@ def _dotted(node: ast.expr) -> list[str] | None:
 
 
 def references(index: Index, names: dict, nodes) -> set[str]:
-    """The myf node ids (``module:name``, or ``module:`` for a module's
+    """The mosp node ids (``module:name``, or ``module:`` for a module's
     top-level code) the given AST nodes refer to."""
     found: set[str] = set()
     for root in nodes:
@@ -383,7 +383,7 @@ def unused_methods(index: Index, seen: set[str], sources: list[Path]) -> set[str
             if member.name.startswith("__") or member.name in used:
                 continue
             # A decorated method is registered with what decorates it (a
-            # validator, a property), and one a base class outside myf
+            # validator, a property), and one a base class outside mosp
             # declares is called by that class.
             if member.decorator_list or _overrides(
                 index, module_name, node, member.name
@@ -394,7 +394,7 @@ def unused_methods(index: Index, seen: set[str], sources: list[Path]) -> set[str
 
 
 def _overrides(index: Index, module_name: str, cls: ast.ClassDef, name: str) -> bool:
-    """Whether a base class from outside myf has an attribute ``name``."""
+    """Whether a base class from outside mosp has an attribute ``name``."""
     import importlib
 
     imported: dict[str, str] = {}
@@ -442,7 +442,7 @@ def _hook_names(index: Index) -> set[str]:
 
 def provided_hooks(sources: list[Path]) -> set[str]:
     """The hooks the applications define: the top-level names of each module
-    an application names as its hooks in ``myf.host.bind(hooks=...)``."""
+    an application names as its hooks in ``mosp.host.bind(hooks=...)``."""
     # Applications may name their modules alike, so each is found under the
     # directory its source tree sits in.
     modules: set[tuple[Path, str]] = set()
@@ -483,7 +483,7 @@ def report(index, unused, tested, unrun, methods=(), hooks=None, only=None) -> s
         lines.append(f"  {module}")
         for name in sorted(by_module[module]):
             ident = f"{module}:{name if name != '(the whole module)' else ''}"
-            mark = "  (myf's tests use it)" if ident in tested else ""
+            mark = "  (mosp's tests use it)" if ident in tested else ""
             lines.append(f"    {name}{mark}")
     for app, names in sorted((only or {}).items()):
         lines.append("")
@@ -502,7 +502,7 @@ def report(index, unused, tested, unrun, methods=(), hooks=None, only=None) -> s
     if hooks is not None:
         lines.append("")
         lines.append(
-            f"Hooks no application provides (myf's default always runs): {len(hooks)}"
+            f"Hooks no application provides (mosp's default always runs): {len(hooks)}"
         )
         for name in sorted(hooks):
             lines.append(f"  {name}")
@@ -515,14 +515,14 @@ def report(index, unused, tested, unrun, methods=(), hooks=None, only=None) -> s
 
 
 def analyse(
-    myf_dir: Path,
+    mosp_dir: Path,
     apps: list[Path] | dict[str, list[Path]],
     tests: list[Path],
     coverage_files: list[Path],
 ):
     if not isinstance(apps, dict):
         apps = {"applications": list(apps)}
-    index = Index(myf_dir)
+    index = Index(mosp_dir)
     edges, registered_by = graph(index)
     reach = {
         name: reachable(edges, registered_by, tree_references(index, trees))
@@ -568,7 +568,7 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("apps", nargs="+", metavar="[NAME=]APP_SOURCE")
     here = Path(__file__).resolve().parents[1]
-    parser.add_argument("--myf", type=Path, default=here / PACKAGE)
+    parser.add_argument("--mosp", type=Path, default=here / PACKAGE)
     parser.add_argument("--tests", type=Path, action="append", default=[])
     parser.add_argument("--coverage", type=Path, action="append", default=[])
     args = parser.parse_args(argv)
@@ -577,7 +577,7 @@ def main(argv: list[str]) -> int:
         name, _, tree = given.rpartition("=")
         apps[name or tree].append(Path(tree))
     index, unused, tested, unrun, methods, hooks, only = analyse(
-        args.myf, dict(apps), args.tests, args.coverage
+        args.mosp, dict(apps), args.tests, args.coverage
     )
     sys.stdout.write(report(index, unused, tested, unrun, methods, hooks, only))
     return 0

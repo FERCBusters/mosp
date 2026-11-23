@@ -2,10 +2,10 @@ import os
 
 from pydantic_settings import SettingsConfigDict
 
-from myf.config import MyfSettings
+from mosp.config import MospSettings
 
 
-class Settings(MyfSettings):
+class Settings(MospSettings):
     model_config = SettingsConfigDict(env_prefix="TESTAPP_", case_sensitive=False)
 
 
@@ -15,7 +15,7 @@ settings = Settings(
     csrf_cookie_name="testapp_csrf",
     smtp_from_name="TestApp",
     database_url=os.environ.get(
-        "MYF_TEST_DATABASE_URL",
-        "postgresql+psycopg2://myf_test:myf_test@127.0.0.1:5432/myf_test",
+        "MOSP_TEST_DATABASE_URL",
+        "postgresql+psycopg2://mosp_test:mosp_test@127.0.0.1:5432/mosp_test",
     ),
 )

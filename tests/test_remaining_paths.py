@@ -10,12 +10,12 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError
 from starlette.requests import Request
 
-from myf import middleware
-from myf.api.routes import auth as auth_routes
-from myf.api.schemas import LoginPayload
-from myf.security import ldap, sessions
-from myf.security.auth import cookie_name as session_cookie_name
-from myf.services import login, security_notifications
+from mosp import middleware
+from mosp.api.routes import auth as auth_routes
+from mosp.api.schemas import LoginPayload
+from mosp.security import ldap, sessions
+from mosp.security.auth import cookie_name as session_cookie_name
+from mosp.services import login, security_notifications
 from tests.assembled import BASE, PASSWORD, unsafe
 from tests.ldap_directory import directory  # noqa: F401 - fixture
 from tests.testapp.config import settings
@@ -38,7 +38,7 @@ def test_a_sign_in_from_another_origin_is_refused(site):
 
 
 def test_the_sign_in_route_checks_the_origin_itself(db):
-    # Mounted without myf's middleware, the route still refuses.
+    # Mounted without mosp's middleware, the route still refuses.
     request = Request(
         {
             "type": "http",

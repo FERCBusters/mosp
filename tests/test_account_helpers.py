@@ -5,11 +5,11 @@ import uuid
 import pytest
 from starlette.requests import Request
 
-from myf.api.context import change_context, machine_credential, mark_machine_credential
-from myf.security import permissions, roles
-from myf.services.activity_log import record_action
-from myf.services.context import ChangeContext, signed_in_user
-from myf.services.errors import DomainError
+from mosp.api.context import change_context, machine_credential, mark_machine_credential
+from mosp.security import permissions, roles
+from mosp.services.activity_log import record_action
+from mosp.services.context import ChangeContext, signed_in_user
+from mosp.services.errors import DomainError
 from tests.testapp.models import AuditLog, Group, Permission, User
 
 

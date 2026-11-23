@@ -7,12 +7,12 @@ from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import NullPool
 
-import myf.host
+import mosp.host
 
 # Settings built in tests need the public origin the application requires.
 os.environ.setdefault("TESTAPP_PUBLIC_BASE_URL", "http://testserver")
 
-myf.host.bind(
+mosp.host.bind(
     name="testapp",
     title="TestApp",
     config="tests.testapp.config",
@@ -60,7 +60,7 @@ def schema_engine_for_module():
     from tests.testapp.db import Base
 
     url = settings.database_url
-    schema = "myf_" + uuid.uuid4().hex
+    schema = "mosp_" + uuid.uuid4().hex
     admin = create_engine(url, poolclass=NullPool)
     with admin.begin() as conn:
         conn.execute(text(f'CREATE SCHEMA "{schema}"'))
@@ -94,7 +94,7 @@ def db(schema_engine_for_module):
 @pytest.fixture
 def valkey(monkeypatch):
     """A private in-memory Valkey for the test."""
-    from myf.core import valkey as store
+    from mosp.core import valkey as store
 
     server = fakeredis.FakeServer()
 
@@ -124,8 +124,8 @@ def production_client(db, monkeypatch):
     sessions in a private in-memory Valkey."""
     from fastapi.testclient import TestClient
 
-    from myf import middleware
-    from myf.security import auth, permissions
+    from mosp import middleware
+    from mosp.security import auth, permissions
     from tests.testapp.config import settings
     from tests.testapp.main import app
     from tests.testapp.models import User

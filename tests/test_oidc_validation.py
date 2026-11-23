@@ -15,7 +15,7 @@ from joserfc.errors import JoseError
 from joserfc.jwk import ECKey, RSAKey
 from starlette.requests import Request
 
-from myf.security import oidc
+from mosp.security import oidc
 
 
 @pytest.fixture(scope="module")

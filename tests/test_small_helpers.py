@@ -9,16 +9,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from myf.api.uploads import upload_inputs
-from myf.core.identifiers import try_uuid
-from myf.security import json_shape
-from myf.security.csv import spreadsheet_cell
-from myf.security.placeholders import is_placeholder
-from myf.security.provider_logging import suppress_provider_logs
-from myf.security.urls import external_url, same_site_path
-from myf.services import text
-from myf.services.errors import DomainError
-from myf.services.uploads import Upload, upload_size
+from mosp.api.uploads import upload_inputs
+from mosp.core.identifiers import try_uuid
+from mosp.security import json_shape
+from mosp.security.csv import spreadsheet_cell
+from mosp.security.placeholders import is_placeholder
+from mosp.security.provider_logging import suppress_provider_logs
+from mosp.security.urls import external_url, same_site_path
+from mosp.services import text
+from mosp.services.errors import DomainError
+from mosp.services.uploads import Upload, upload_size
 
 # -- external links ---------------------------------------------------------
 

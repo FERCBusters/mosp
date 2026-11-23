@@ -12,7 +12,7 @@ import re
 
 import pytest
 
-from myf.security.request_limits import target_traverses
+from mosp.security.request_limits import target_traverses
 from tests.assembled import unsafe
 
 

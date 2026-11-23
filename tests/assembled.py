@@ -1,4 +1,4 @@
-"""The assembled test application: requests pass through myf's middleware,
+"""The assembled test application: requests pass through mosp's middleware,
 real password sign-in, CSRF, session storage and permission resolution."""
 
 import uuid
@@ -6,7 +6,7 @@ import uuid
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
 
-from myf.security.passwords import hash_password
+from mosp.security.passwords import hash_password
 
 BASE = "https://app.example"
 PASSWORD = "synthetic-password-for-tests"
@@ -21,7 +21,7 @@ class Site:
 
     @classmethod
     def serve(cls, db, store, monkeypatch):
-        from myf import middleware
+        from mosp import middleware
         from tests.testapp import db as database
         from tests.testapp.config import settings
         from tests.testapp.main import app

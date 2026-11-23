@@ -1,18 +1,18 @@
 name: Bump dependants
 
-# When myf CI passes on a push to main, proposes the new myf commit to each
-# application built on myf: its pyproject.toml pin and poetry.lock are updated
-# on an autobot/myf-* branch of that repository and offered in a pull request,
+# When mosp CI passes on a push to main, proposes the new mosp commit to each
+# application built on mosp: its pyproject.toml pin and poetry.lock are updated
+# on an autobot/mosp-* branch of that repository and offered in a pull request,
 # where the application's own CI runs. This workflow never approves or merges,
-# and an application that does not use myf yet is left alone.
+# and an application that does not use mosp yet is left alone.
 #
 # A GitHub App opens the pull requests, so they start the applications' CI.
-# Install an App on myf, keen, midena and ospmae with Contents and Pull
+# Install an App on mosp, keen, midena and ospmae with Contents and Pull
 # requests read and write access, then set this repository's variable
-# MYF_BUMP_APP_CLIENT_ID and secret MYF_BUMP_APP_PRIVATE_KEY.
+# MOSP_BUMP_APP_CLIENT_ID and secret MOSP_BUMP_APP_PRIVATE_KEY.
 on:
   workflow_run:
-    workflows: ["myf CI"]
+    workflows: ["mosp CI"]
     types: [completed]
     branches: [main]
   workflow_dispatch:
@@ -22,7 +22,7 @@ permissions:
 
 env:
   BASE_BRANCH: main
-  BRANCH_PREFIX: autobot/myf-
+  BRANCH_PREFIX: autobot/mosp-
   POETRY_VERSION: "2.4.1"
 
 jobs:
@@ -63,32 +63,32 @@ jobs:
 
       - name: Check the GitHub App settings
         env:
-          CLIENT_ID: ${{ vars.MYF_BUMP_APP_CLIENT_ID }}
-          HAS_KEY: ${{ secrets.MYF_BUMP_APP_PRIVATE_KEY != '' }}
+          CLIENT_ID: ${{ vars.MOSP_BUMP_APP_CLIENT_ID }}
+          HAS_KEY: ${{ secrets.MOSP_BUMP_APP_PRIVATE_KEY != '' }}
         run: |
           if [ -z "$CLIENT_ID" ] || [ "$HAS_KEY" != true ]; then
-            echo "::error::MYF_BUMP_APP_CLIENT_ID or MYF_BUMP_APP_PRIVATE_KEY is missing. See the top of this workflow."
+            echo "::error::MOSP_BUMP_APP_CLIENT_ID or MOSP_BUMP_APP_PRIVATE_KEY is missing. See the top of this workflow."
             exit 1
           fi
 
-      # One token, limited to the application and to myf, which the lock
+      # One token, limited to the application and to mosp, which the lock
       # update fetches.
       - name: Create GitHub App token
         id: app
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          client-id: ${{ vars.MYF_BUMP_APP_CLIENT_ID }}
-          private-key: ${{ secrets.MYF_BUMP_APP_PRIVATE_KEY }}
+          client-id: ${{ vars.MOSP_BUMP_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MOSP_BUMP_APP_PRIVATE_KEY }}
           owner: FERCBusters
-          repositories: myf,${{ matrix.repository }}
+          repositories: mosp,${{ matrix.repository }}
           permission-contents: write
           permission-pull-requests: write
 
-      - name: Checkout myf
+      - name: Checkout mosp
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.COMMIT }}
-          path: myf
+          path: mosp
           persist-credentials: false
 
       - name: Checkout ${{ matrix.repository }}
@@ -104,8 +104,8 @@ jobs:
         id: pin
         run: |
           set -euo pipefail
-          report="$RUNNER_TEMP/myf-bump"
-          python3 -I myf/tools/bump_pin.py target "$COMMIT" "$report"
+          report="$RUNNER_TEMP/mosp-bump"
+          python3 -I mosp/tools/bump_pin.py target "$COMMIT" "$report"
           cat "$report/outputs.txt" >> "$GITHUB_OUTPUT"
 
       - name: Update the lock files
@@ -114,17 +114,17 @@ jobs:
           TOKEN: ${{ steps.app.outputs.token }}
         run: |
           set -euo pipefail
-          python3 -m venv /opt/myf-bump-poetry
-          /opt/myf-bump-poetry/bin/python -m pip install "poetry==${POETRY_VERSION}"
-          # Poetry fetches myf with git, through the App token, which no file
+          python3 -m venv /opt/mosp-bump-poetry
+          /opt/mosp-bump-poetry/bin/python -m pip install "poetry==${POETRY_VERSION}"
+          # Poetry fetches mosp with git, through the App token, which no file
           # in either checkout keeps.
-          /opt/myf-bump-poetry/bin/poetry config system-git-client true
+          /opt/mosp-bump-poetry/bin/poetry config system-git-client true
           export GIT_CONFIG_COUNT=1
           export GIT_CONFIG_KEY_0="url.https://x-access-token:${TOKEN}@github.com/.insteadOf"
           export GIT_CONFIG_VALUE_0="https://github.com/"
           while IFS= read -r project; do
-            (cd "target/$project" && /opt/myf-bump-poetry/bin/poetry lock --no-interaction)
-          done < "$RUNNER_TEMP/myf-bump/projects.txt"
+            (cd "target/$project" && /opt/mosp-bump-poetry/bin/poetry lock --no-interaction)
+          done < "$RUNNER_TEMP/mosp-bump/projects.txt"
 
       - name: Propose the new pin
         if: steps.pin.outputs.changed == 'true'
@@ -134,7 +134,7 @@ jobs:
         working-directory: target
         run: |
           set -euo pipefail
-          report="$RUNNER_TEMP/myf-bump"
+          report="$RUNNER_TEMP/mosp-bump"
           branch="${BRANCH_PREFIX}${COMMIT:0:12}"
           git config --global --add safe.directory "$PWD"
 
@@ -179,7 +179,7 @@ jobs:
             echo "Opened $url for review."
           fi
 
-          # An older myf commit's proposal is superseded by this one.
+          # An older mosp commit's proposal is superseded by this one.
           gh pr list --state open --limit 100 --json number,headRefName,author \
             | jq -r --arg prefix "$BRANCH_PREFIX" --arg branch "$branch" \
               '.[] | select(.author.is_bot and (.headRefName | startswith($prefix))

@@ -5,7 +5,7 @@ import re
 
 import pytest
 
-from myf.security import regex as rx
+from mosp.security import regex as rx
 
 # -- code patterns ------------------------------------------------------------
 

@@ -1,6 +1,6 @@
-"""The test application's account tables, built from myf's mixins."""
+"""The test application's account tables, built from mosp's mixins."""
 
-from myf.db.accounts import (
+from mosp.db.accounts import (
     AuditLogMixin,
     GroupMixin,
     MfaChallengeMixin,

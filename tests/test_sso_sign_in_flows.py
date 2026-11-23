@@ -21,9 +21,9 @@ from fastapi import HTTPException
 from joserfc import jwt
 from joserfc.jwk import RSAKey
 
-from myf.core.datetime_utils import utc_now_naive
-from myf.security import oidc
-from myf.security.auth import cookie_name as session_cookie_name
+from mosp.core.datetime_utils import utc_now_naive
+from mosp.security import oidc
+from mosp.security.auth import cookie_name as session_cookie_name
 from tests.testapp.config import settings
 from tests.testapp.models import (
     AuditLog,

@@ -7,7 +7,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from myf.security import redaction as r
+from mosp.security import redaction as r
 from tests.source_tree import name_in
 
 APP = Path(r.__file__).resolve().parents[1]

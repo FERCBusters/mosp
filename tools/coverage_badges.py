@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render the coverage, mypy and ruff badges from myf CI's reports.
+"""Render the coverage, mypy and ruff badges from mosp CI's reports.
 
 Usage: coverage_badges.py RESULTS_DIR OUTPUT_DIR
 

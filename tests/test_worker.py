@@ -8,10 +8,10 @@ from celery import Celery
 from celery.signals import task_postrun, task_prerun
 from sqlalchemy.orm import sessionmaker
 
-from myf import worker
-from myf.core import task_deadline
-from myf.core.datetime_utils import utc_now_naive
-from myf.services import audit_retention
+from mosp import worker
+from mosp.core import task_deadline
+from mosp.core.datetime_utils import utc_now_naive
+from mosp.services import audit_retention
 from tests.testapp.config import settings
 from tests.testapp.models import AuditLog
 
@@ -127,7 +127,7 @@ def test_expired_records_are_deleted_oldest_first_in_short_batches(db, monkeypat
 
 
 def test_expired_sign_in_rows_are_removed_and_current_ones_kept(db, monkeypatch):
-    from myf.services import housekeeping
+    from mosp.services import housekeeping
     from tests.testapp.models import (
         MfaChallenge,
         OidcLoginState,

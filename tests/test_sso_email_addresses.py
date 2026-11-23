@@ -9,9 +9,9 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from myf.core.datetime_utils import utc_now_naive
-from myf.services import sso_emails
-from myf.services.errors import DomainError
+from mosp.core.datetime_utils import utc_now_naive
+from mosp.services import sso_emails
+from mosp.services.errors import DomainError
 from tests.assembled import unsafe
 from tests.testapp.config import settings
 from tests.testapp.models import (

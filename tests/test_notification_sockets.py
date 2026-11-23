@@ -9,7 +9,7 @@ import pytest
 from starlette.routing import WebSocketRoute
 from starlette.websockets import WebSocketDisconnect
 
-from myf.realtime import notifications, sockets
+from mosp.realtime import notifications, sockets
 from tests.assembled import BASE
 from tests.testapp import main
 

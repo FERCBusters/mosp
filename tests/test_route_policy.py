@@ -1,14 +1,14 @@
 """Which writes a signed-in account may make, as the middleware decides from
-myf's route policy merged with the application's, and the first
+mosp's route policy merged with the application's, and the first
 administrator an empty installation is given."""
 
 import pytest
 from sqlalchemy.orm import sessionmaker
 
-from myf import middleware
-from myf.security import route_policy
-from myf.security.route_policy import (
-    MYF_POLICY,
+from mosp import middleware
+from mosp.security import route_policy
+from mosp.security.route_policy import (
+    MOSP_POLICY,
     PrefixRule,
     RouteCodes,
     RoutePolicy,
@@ -101,7 +101,7 @@ def test_policies_merge_and_are_recomputed_when_the_application_changes_its_own(
     hook(route_policy=lambda: first)
     assert route_policy.policy().gated.lookup("POST", "/a") == "a.write"
     hook(route_policy=lambda: None)
-    assert route_policy.policy() is MYF_POLICY
+    assert route_policy.policy() is MOSP_POLICY
     hook(route_policy=lambda: second)
     assert route_policy.policy().gated.lookup("POST", "/a") is None
     assert route_policy.policy().gated.lookup("POST", "/b") == "b.write"
@@ -214,7 +214,7 @@ def test_an_application_may_close_every_write_it_has_not_declared(site, hook):
     # Administrators too: nobody decided who may call it.
     assert _write(site, "/v1/things") == refused
     assert _write(site, "/v1/things", role="admin") == refused
-    # Declared writes, admin namespaces and myf's own routes stay open as
+    # Declared writes, admin namespaces and mosp's own routes stay open as
     # declared.
     assert _write(site, "/v1/gated", "gated.write") == (200, {"gated": True})
     assert _write(site, "/v1/notes/7") == (200, {"note": 7})

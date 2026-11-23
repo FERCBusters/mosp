@@ -1,4 +1,4 @@
-"""tools/bump_pin.py: moving an application's myf pin to a new myf commit,
+"""tools/bump_pin.py: moving an application's mosp pin to a new mosp commit,
 as the bump workflow does for KEEN, MIDENA and OSPMAE."""
 
 import importlib.util
@@ -25,11 +25,11 @@ def _load_tool():
 bump_pin = _load_tool()
 
 
-def _pyproject(rev, *, url="https://github.com/FERCBusters/myf.git"):
+def _pyproject(rev, *, url="https://github.com/FERCBusters/mosp.git"):
     return (
         "[tool.poetry.dependencies]\n"
         'python = "^3.13"\n'
-        f'myf = {{ git = "{url}", rev = "{rev}" }}\n'
+        f'mosp = {{ git = "{url}", rev = "{rev}" }}\n'
         'fastapi = "^0.141"\n'
     )
 
@@ -57,10 +57,10 @@ def test_the_pin_moves_and_nothing_else_changes(checkout, tmp_path):
     assert (out / "outputs.txt").read_text() == f"changed=true\nprevious={OLD}\n"
     assert (out / "projects.txt").read_text() == "services/api\n"
     assert (
-        (out / "commit-message.txt").read_text().startswith(f"Move myf to {NEW[:12]}\n")
+        (out / "commit-message.txt").read_text().startswith(f"Move mosp to {NEW[:12]}\n")
     )
     body = (out / "pr-body.md").read_text()
-    assert f"https://github.com/FERCBusters/myf/compare/{OLD}...{NEW}" in body
+    assert f"https://github.com/FERCBusters/mosp/compare/{OLD}...{NEW}" in body
     assert "- `services/api`" in body
 
 
@@ -74,16 +74,16 @@ def test_an_application_already_at_the_commit_is_left_alone(checkout, tmp_path):
     )
 
 
-def test_an_application_without_myf_is_left_alone(tmp_path):
+def test_an_application_without_mosp_is_left_alone(tmp_path):
     (tmp_path / "pyproject.toml").write_text('[tool.poetry]\nname = "ospmae"\n')
     (tmp_path / "other").mkdir()
     (tmp_path / "other/pyproject.toml").write_text(
-        _pyproject(OLD, url="https://github.com/elsewhere/myf.git")
+        _pyproject(OLD, url="https://github.com/elsewhere/mosp.git")
     )
     assert bump_pin.bump(tmp_path, NEW) == ([], "")
     bump_pin.report([], "", NEW, tmp_path / "report")
     body = (tmp_path / "report/pr-body.md").read_text()
-    assert f"https://github.com/FERCBusters/myf/commit/{NEW}" in body
+    assert f"https://github.com/FERCBusters/mosp/commit/{NEW}" in body
 
 
 @pytest.mark.parametrize("commit", ["main", NEW[:12], NEW.upper(), NEW + "0"])

@@ -1,8 +1,8 @@
 """The test application's hooks: its route policy and measured fields. A test
 installs others through the ``hook`` fixture."""
 
-from myf.security.regex import scan_pattern
-from myf.security.route_policy import PrefixRule, RouteCodes, RoutePolicy, RouteSet
+from mosp.security.regex import scan_pattern
+from mosp.security.route_policy import PrefixRule, RouteCodes, RoutePolicy, RouteSet
 
 ISSUED = scan_pattern(r"tst_[A-Za-z0-9]{8}")
 

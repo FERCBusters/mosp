@@ -15,13 +15,13 @@ from ldap3.core.exceptions import LDAPException
 from ldap3.operation.bind import bind_operation
 from starlette.requests import Request
 
-import myf.services.login as login_operations
-from myf.api.routes import auth
-from myf.api.schemas import LoginPayload
-from myf.security import ldap, mfa
-from myf.security.auth import authenticate_user
-from myf.security.auth import cookie_name as session_cookie_name
-from myf.security.sessions import get_session
+import mosp.services.login as login_operations
+from mosp.api.routes import auth
+from mosp.api.schemas import LoginPayload
+from mosp.security import ldap, mfa
+from mosp.security.auth import authenticate_user
+from mosp.security.auth import cookie_name as session_cookie_name
+from mosp.security.sessions import get_session
 from tests.ldap_directory import directory  # noqa: F401 - fixture
 from tests.testapp.config import settings
 from tests.testapp.models import MfaChallenge, User
@@ -272,7 +272,7 @@ def test_unsafe_group_settings_refuse_sign_in_before_connecting(
 def test_the_log_names_why_directory_sign_in_is_unavailable_without_directory_data(
     directory, monkeypatch, caplog
 ):
-    caplog.set_level(logging.WARNING, logger="myf.security.ldap")
+    caplog.set_level(logging.WARNING, logger="mosp.security.ldap")
     monkeypatch.setattr(settings, "ldap_bind_dn", "")
     with pytest.raises(HTTPException):
         ldap.directory_identity("alice", "secret")
@@ -331,7 +331,7 @@ def test_a_directory_refusing_one_entry_is_answered_as_a_wrong_password(
     """Directories refuse a locked, expired or disabled account with result
     codes of their own. Answered as an outage, they would show that the typed
     name matched an entry, which a wrong password never shows."""
-    caplog.set_level("WARNING", logger="myf.security.ldap")
+    caplog.set_level("WARNING", logger="mosp.security.ldap")
     directory[0]["user_bind"] = result
     assert ldap.directory_identity("alice", "secret") is None
     # The operator's log names the code and nothing about the entry.

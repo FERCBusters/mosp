@@ -1,14 +1,14 @@
-"""myf's stateless primitives, under a test application's name."""
+"""mosp's stateless primitives, under a test application's name."""
 
 import fakeredis
 import pytest
 from starlette.requests import Request
 
-from myf.core.email_address import single_mailbox
-from myf.core.identifiers import try_uuid
-from myf.security import csrf, passwords, rate_limit, redaction, sessions
-from myf.security.request_limits import screen_cookies, target_traverses
-from myf.security.xml import parse_untrusted_xml
+from mosp.core.email_address import single_mailbox
+from mosp.core.identifiers import try_uuid
+from mosp.security import csrf, passwords, rate_limit, redaction, sessions
+from mosp.security.request_limits import screen_cookies, target_traverses
+from mosp.security.xml import parse_untrusted_xml
 
 
 def test_store_keys_carry_the_application_name():
@@ -78,7 +78,7 @@ def test_encoded_separators_reach_only_the_routes_that_take_them(hook):
     scope = {"path": "/v1/files/a/b", "raw_path": b"/v1/files/a%2Fb"}
     assert target_traverses(scope)
     assert target_traverses({"path": "/v1/../admin", "raw_path": b"/v1/../admin"})
-    from myf.security.regex import scan_pattern
+    from mosp.security.regex import scan_pattern
 
     hook(encoded_slash_routes=lambda: scan_pattern(r"/v1/files/.+"))
     assert not target_traverses(scope)
@@ -106,7 +106,7 @@ def test_identifiers_and_mailboxes_have_one_spelling():
 def test_iso_times_have_one_reading():
     from datetime import datetime
 
-    from myf.core.datetime_utils import parse_iso_datetime, parse_iso_datetime_or_none
+    from mosp.core.datetime_utils import parse_iso_datetime, parse_iso_datetime_or_none
 
     assert parse_iso_datetime("2026-01-07T00:09:08Z") == datetime(2026, 1, 7, 0, 9, 8)
     assert parse_iso_datetime("2026-01-01T10:00+10:00") == datetime(2026, 1, 1)

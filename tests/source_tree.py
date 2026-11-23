@@ -1,12 +1,12 @@
-"""myf's own modules, scanned by the source contracts."""
+"""mosp's own modules, scanned by the source contracts."""
 
 from __future__ import annotations
 
 from pathlib import Path, PurePosixPath
 
-import myf
+import mosp
 
-SOURCES = Path(myf.__file__).resolve().parent
+SOURCES = Path(mosp.__file__).resolve().parent
 
 
 def name_in(path: Path, root: Path) -> PurePosixPath:

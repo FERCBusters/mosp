@@ -13,16 +13,16 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 from starlette.requests import Request
 
-import myf.host
-from myf.core import email_address
-from myf.host import hooks
-from myf.security import auth, mfa, sessions, sso_http
-from myf.security import redaction as r
-from myf.security.headers import SecurityHeadersMiddleware
-from myf.security.json_shape import MAX_DEPTH, NESTED_TOO_DEEPLY
-from myf.security.rate_limit import fixed_window_spend
-from myf.security.request_limits import RequestBodyLimitMiddleware
-from myf.security.rich_text import rich_text_has_text
+import mosp.host
+from mosp.core import email_address
+from mosp.host import hooks
+from mosp.security import auth, mfa, sessions, sso_http
+from mosp.security import redaction as r
+from mosp.security.headers import SecurityHeadersMiddleware
+from mosp.security.json_shape import MAX_DEPTH, NESTED_TOO_DEEPLY
+from mosp.security.rate_limit import fixed_window_spend
+from mosp.security.request_limits import RequestBodyLimitMiddleware
+from mosp.security.rich_text import rich_text_has_text
 from tests.testapp.config import Settings, settings
 from tests.testapp.models import User
 
@@ -377,15 +377,15 @@ def test_a_mailbox_the_mail_library_reads_otherwise_is_refused(monkeypatch):
 
 
 def test_without_a_bound_application_the_hooks_keep_their_defaults(monkeypatch):
-    monkeypatch.delitem(myf.host._bound, "hooks")
+    monkeypatch.delitem(mosp.host._bound, "hooks")
     assert hooks.session_allowed(None, None, {}) is True
     assert hooks.sso_identity_allowed("oidc", "i", "s") is None
 
 
 def test_identity_is_needed_before_names_are_made(monkeypatch):
-    monkeypatch.delitem(myf.host._identity, "name")
-    with pytest.raises(RuntimeError, match="myf.host.bind"):
-        myf.host.name()
+    monkeypatch.delitem(mosp.host._identity, "name")
+    with pytest.raises(RuntimeError, match="mosp.host.bind"):
+        mosp.host.name()
 
 
 # -- settings -----------------------------------------------------------------
@@ -438,7 +438,7 @@ def test_an_identity_provider_must_answer_without_compression(monkeypatch):
 
 
 def test_a_sliding_window_admits_its_limit_in_any_window(store):
-    from myf.security.rate_limit import sliding_window_allow
+    from mosp.security.rate_limit import sliding_window_allow
 
     def take(at):
         return sliding_window_allow(store, "costly", 2, 60, now=at)
@@ -455,7 +455,7 @@ def test_a_sliding_window_admits_its_limit_in_any_window(store):
 
 
 def test_a_sliding_window_without_its_store_follows_the_callers_choice():
-    from myf.security.rate_limit import sliding_window_allow
+    from mosp.security.rate_limit import sliding_window_allow
 
     class Down:
         def pipeline(self, transaction=True):

@@ -1,5 +1,5 @@
-"""Every route's error contract and body parsing (myf.api.errors and
-myf.api.forms), on a router of its own as an application mounts one."""
+"""Every route's error contract and body parsing (mosp.api.errors and
+mosp.api.forms), on a router of its own as an application mounts one."""
 
 import asyncio
 import json
@@ -12,16 +12,16 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel
 from sqlalchemy.exc import DataError
 
-from myf.api import errors
-from myf.api.errors import (
+from mosp.api import errors
+from mosp.api.errors import (
     decode_json_body,
     domain_error_response,
     json_object,
     validation_error_response,
 )
-from myf.api.forms import parse_form
-from myf.api.routing import Router
-from myf.services.errors import DomainError
+from mosp.api.forms import parse_form
+from mosp.api.routing import Router
+from mosp.services.errors import DomainError
 
 JSON = {"Content-Type": "application/json"}
 
@@ -105,7 +105,7 @@ def test_a_domain_error_outside_a_route_has_the_same_answer():
 
 
 def test_a_value_the_database_refuses_is_named_without_its_values(client, caplog):
-    with caplog.at_level(logging.WARNING, logger="myf.api.errors"):
+    with caplog.at_level(logging.WARNING, logger="mosp.api.errors"):
         response = client.get("/data")
     assert (response.status_code, response.json()) == (
         400,
@@ -117,7 +117,7 @@ def test_a_value_the_database_refuses_is_named_without_its_values(client, caplog
 
 
 def test_arithmetic_out_of_range_is_a_bad_request(client, caplog):
-    with caplog.at_level(logging.WARNING, logger="myf.api.errors"):
+    with caplog.at_level(logging.WARNING, logger="mosp.api.errors"):
         response = client.get("/overflow")
     assert (response.status_code, response.json()) == (
         400,
@@ -314,4 +314,4 @@ def test_a_form_is_held_to_the_body_limit_without_the_middleware(hook):
 
 
 def test_the_module_logs_under_its_own_name():
-    assert errors.logger.name == "myf.api.errors"
+    assert errors.logger.name == "mosp.api.errors"
