@@ -187,6 +187,10 @@ def references(index: Index, names: dict, nodes) -> set[str]:
     top-level code) the given AST nodes refer to."""
     found: set[str] = set()
     for root in nodes:
+        # A chain that is the base of a longer one is read as part of it.
+        bases = {
+            id(node.value) for node in ast.walk(root) if isinstance(node, ast.Attribute)
+        }
         for node in ast.walk(root):
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 continue
@@ -203,6 +207,13 @@ def references(index: Index, names: dict, nodes) -> set[str]:
             while kind == "module":
                 found.add(f"{target}:")
                 if not rest:
+                    if id(node) not in bases:
+                        # The module itself is passed on as a value (in a
+                        # tuple to iterate over, say), so whatever is read
+                        # from it is out of sight: all it defines is reached.
+                        found.update(
+                            f"{target}:{name}" for name in index.modules[target].defined
+                        )
                     break
                 resolved = index.resolve(target, rest[0])
                 if resolved is None:

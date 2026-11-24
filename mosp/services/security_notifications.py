@@ -1,22 +1,17 @@
 """Transactional security-email outbox and per-user successful-login IP history."""
 
-import logging
-from datetime import timedelta
-
 from sqlalchemy.dialects.postgresql import insert
 
 from mosp import host
 from mosp.core.datetime_utils import utc_now_naive as now
 from mosp.core.email_address import single_mailbox
-from mosp.core.task_deadline import TIME_LIMITS
 from mosp.host import hooks
 from mosp.host.config import settings
 from mosp.host.db import SessionLocal
 from mosp.host.models import SecurityNotification, UserLoginIP
 from mosp.security.mfa import CODE_ATTEMPTS
+from mosp.services import outbox
 from mosp.services.mailer import send_email, smtp_configured
-
-log = logging.getLogger(__name__)
 
 
 def enqueue(db, user, event, *, ip=None):
@@ -93,75 +88,14 @@ def pending_for(db, user_id) -> int:
     )
 
 
-def _next_pending(db, served):
-    return (
-        db.query(SecurityNotification)
-        .filter(
-            SecurityNotification.status == "pending",
-            SecurityNotification.next_attempt_at <= now(),
-            SecurityNotification.recipient.notin_(served),
-        )
-        .order_by(SecurityNotification.created_at)
-        .with_for_update(skip_locked=True)
-        .first()
-    )
-
-
 def deliver_pending(limit=10):
-    """Send waiting messages, oldest first, taking each recipient in turn.
-
-    One recipient's backlog, however long, takes one place in each turn: a
-    message for anyone else, such as a verification link that expires or a
-    security alert, is sent in the run that finds it and never waits behind
-    the backlog.
-    """
+    """Send waiting security notices (mosp.services.outbox)."""
     if not smtp_configured():
         return 0
-    sent = 0
-    served: list[str] = []
-    for _ in range(limit):
-        with SessionLocal() as db:
-            row = _next_pending(db, served)
-            if row is None and served:
-                # Everyone waiting has had a turn; start the next one.
-                served.clear()
-                row = _next_pending(db, served)
-            if row is None:
-                break
-            served.append(row.recipient)
-            row.attempts += 1
-            try:
-                send_email(to_email=row.recipient, subject=row.subject, body=row.body)
-            except TIME_LIMITS:
-                # No failed attempt is recorded: the message waits, unchanged,
-                # for the next run.
-                raise
-            except Exception as error:
-                # Exception messages may expose SMTP credentials/addresses; retain only the class.
-                row.last_error = type(error).__name__[:100]
-                row.status = "failed" if row.attempts >= 8 else "pending"
-                row.next_attempt_at = now() + timedelta(
-                    seconds=min(3600, 60 * 2 ** (row.attempts - 1))
-                )
-                log.warning(
-                    "Security notification %s delivery failed; attempt=%s status=%s",
-                    row.id,
-                    row.attempts,
-                    row.status,
-                )
-            else:
-                row.status = "sent"
-                row.sent_at = now()
-                row.last_error = None
-                # A sent message's text, a verification link included, is not kept.
-                row.body = ""
-                sent += 1
-            db.commit()
-    # Bound mail-body retention; known IPs remain until the account is deleted.
-    with SessionLocal() as db:
-        db.query(SecurityNotification).filter(
-            SecurityNotification.status.in_(["sent", "failed"]),
-            SecurityNotification.created_at < now() - timedelta(days=30),
-        ).delete(synchronize_session=False)
-        db.commit()
-    return sent
+    return outbox.deliver(
+        SecurityNotification,
+        limit=limit,
+        sessions=SessionLocal,
+        send=send_email,
+        label="Security notification",
+    )

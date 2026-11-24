@@ -580,6 +580,8 @@ class LocalMfaTests(unittest.TestCase):
             self.assertEqual(row.attempts, 8)
             self.assertEqual(row.status, "failed")
             self.assertEqual(row.last_error, "RuntimeError")
+            # Nothing will send it now; its text is not kept.
+            self.assertEqual(row.body, "")
 
     def test_security_mail_transaction_and_missing_smtp(self):
         from mosp.services import security_notifications as mail

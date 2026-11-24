@@ -104,7 +104,15 @@ DEFAULT_SENSITIVE_KEYS: set[str] = {
     "cookie",
 }
 
-_URL_RE = scan_pattern(r'https?://[^\s"\'<>]+', re.IGNORECASE)
+# Any scheme with an authority: git, ssh and database addresses carry
+# credentials in their userinfo as web addresses do. Another scheme is
+# matched only from the start of a run of scheme characters, and is at most
+# 32 of them, so a long run without "://" is read once rather than from each
+# of its characters in turn; a web address is found wherever it begins.
+_URL_RE = scan_pattern(
+    r'(?:https?|(?<![a-z0-9+.-])[a-z][a-z0-9+.-]{0,31})://[^\s"\'<>]+',
+    re.IGNORECASE,
+)
 
 # Measured facts whose names contain a sensitive-key substring ("password",
 # "signature") but which hold a boolean, a count or a timestamp rather than a

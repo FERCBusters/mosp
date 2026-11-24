@@ -128,6 +128,31 @@ def test_reexports_decorators_lazy_imports_and_module_hooks_are_followed(tmp_pat
     assert "mosp.names:fold" not in unused
 
 
+def test_a_module_passed_on_as_a_value_reaches_all_it_defines(tmp_path):
+    # An application that iterates over modules calls what it reads from
+    # each out of the analysis' sight, so all they define is reached; a
+    # module named only as the base of a longer chain is not.
+    _write(tmp_path / "framework", FRAMEWORK)
+    index = tool.Index(tmp_path / "framework" / "mosp")
+    app = _write(
+        tmp_path / "app",
+        {
+            "app/__init__.py": "",
+            "app/loop.py": (
+                "from mosp import names\n"
+                "from mosp import api\n"
+                "for module in (names,):\n"
+                "    module.fold('A')\n"
+                "value = api.CONSTANT\n"
+            ),
+        },
+    )
+    reached = tool.tree_references(index, [app / "app"])
+    assert {"mosp.names:fold", "mosp.names:unused_helper"} <= reached
+    assert "mosp.api:CONSTANT" in reached
+    assert "mosp.api:helper_only_tests" not in reached
+
+
 def test_names_one_application_alone_reaches_are_listed_under_it(tmp_path):
     _, (*_rest, only) = _analyse(tmp_path)
     assert "mosp.api:endpoint" in only["a"]

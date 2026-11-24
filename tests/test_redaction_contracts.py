@@ -59,6 +59,12 @@ def test_url_redaction_keeps_path_safe_query_and_fragment():
         "token=DO-NOT-LEAK",
         "password: DO-NOT-LEAK",
         "https://example.test/?api_key=DO-NOT-LEAK",
+        "fatal: https://DO-NOT-LEAK@github.com/org/repo",
+        "git clone -- git+ssh://git:DO-NOT-LEAK@host/x --depth 1",
+        "postgresql://app:DO-NOT-LEAK@db:5432/app",
+        "ssh://deploy:DO-NOT-LEAK@example.test/srv/repo.git",
+        # A web address directly after a long run of other characters.
+        "see-the-address-at-the-end-of-this.https://u:DO-NOT-LEAK@example.test",
     ],
 )
 def test_free_text_secrets_are_removed(text):
@@ -528,3 +534,14 @@ def test_a_container_under_a_sensitive_key_in_text_is_redacted_whole(text, redac
     # Text that is not a whole document (a log line, a truncated body) can hold
     # a sensitive key whose value is an object or a list: all of it goes.
     assert r.redact_str(text) == redacted
+
+
+def test_addresses_are_found_in_linear_time():
+    # A long run of characters that could begin a scheme, with no "://",
+    # costs one pass, not one per character.
+    import time
+
+    for text in ("a" * 400_000, "a." * 200_000, "x-" * 200_000 + "://"):
+        started = time.perf_counter()
+        list(r._URL_RE.finditer(text))
+        assert time.perf_counter() - started < 0.5
