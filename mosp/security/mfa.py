@@ -20,13 +20,17 @@ from mosp.host.models import (
     MfaChallenge,
     MfaCredential,
     MfaRecoveryCode,
+    SsoEmailChallenge,
     User,
+    UserIdentity,
+    UserSsoEmail,
 )
 from mosp.security.encoding import digest, unb64url
 from mosp.security.rate_limit import (
     address_window_allow,
     client_ip,
-    fixed_window_allow,
+    sliding_window_allow,
+    sliding_window_take_back,
 )
 from mosp.security.roles import attach_effective_role
 
@@ -120,16 +124,30 @@ def local_session_allowed(db, user, session):
     return True
 
 
-def limit(request, user_id=None):
+def limit(request, user_id, *, address=False):
+    """Admit one second-factor step for the account ``user_id``.
+
+    Every step counts against the account's own allowance, 15 in any 300
+    seconds. A step under a pending challenge follows a correct password,
+    which the sign-in's per-address allowance limits, and the account's
+    wrong-code lockout bounds its guesses, so it takes nothing from the
+    address: no account behind the same address, such as an office NAT or a
+    company VPN, can use up another's second-factor steps. A step that checks
+    a password itself (``address``, starting management) also counts against
+    the address's 40 in 300 seconds, charged only once the account admits
+    it; when the address refuses it, the account has it back.
+    """
     try:
         r = get_valkey()
-        allowed, _ = address_window_allow(
-            r, "mfa", client_ip(request), 40, 300, fail_closed=True
-        )
-        if allowed and user_id is not None:
-            allowed, _ = fixed_window_allow(
-                r, f"{host.name()}:rl:mfa:user:{user_id}", 15, 300, fail_closed=True
+        account = f"{host.name()}:rl:mfa:account:{user_id}"
+        step = secrets.token_hex(16)
+        allowed, _ = sliding_window_allow(r, account, 15, 300, member=step)
+        if allowed and address:
+            allowed, _ = address_window_allow(
+                r, "mfa", client_ip(request), 40, 300, fail_closed=True
             )
+            if not allowed:
+                sliding_window_take_back(r, account, step)
         if not allowed:
             raise HTTPException(429, "Too many verification attempts; try again later")
     except HTTPException:
@@ -196,23 +214,78 @@ def audit(db, user, action, request=None, *, ip=None):
     )
 
 
-def operator_reset(db, user) -> None:
-    """An operator's recovery of a local account that has lost its factors.
+def signs_in_without_sso(user) -> bool:
+    """Whether the account can sign in other than through an SSO identity."""
+    if settings.trust_remote_user:
+        return True  # The authenticating proxy signs it in.
+    if user.auth_backend == "ldap":
+        return bool(settings.ldap_enabled)
+    return bool(settings.local_auth_enabled and user.password_hash)
+
+
+def operator_reset(
+    db, user, *, keep_identity: int | None = None, link_address: str | None = None
+) -> None:
+    """An operator's recovery of a local account that has lost its factors or
+    been taken over.
 
     Every authenticator, recovery code and pending ceremony goes, as does any
-    wrong-code refusal, and the enrolment version moves on, so the account's
-    local sessions end; the owner is mailed a security notice. Where the
-    policy requires a second factor, enrolment is demanded again at the next
-    sign-in. The caller holds the user row's lock and commits.
+    wrong-code refusal. Where the account can sign in without SSO, so does
+    every identity an SSO provider linked to it, with its SSO linking
+    addresses and their pending proofs: an address someone planted would link
+    their identity again at its next sign-in, so the owner proves their own
+    addresses afresh. An account that signs in only through SSO keeps them,
+    as its only way in, unless the operator names the identity to keep
+    (``keep_identity``, an id from ``mosp.services.sso_emails.list_identities``):
+    every other SSO identity then goes with every linking address and pending
+    proof. Where none of them is the owner's, the operator gives instead an
+    address confirmed with the owner (``link_address``): every SSO identity
+    and linking address goes, and that address becomes the account's only
+    linking address, so the owner's next verified sign-in links again. A
+    ValueError names an identity the account does not have, or an address it
+    cannot be given. The
+    enrolment and session versions move on, so every session
+    of the account ends, however it was opened; the owner is mailed a security
+    notice. Where the policy requires a second factor, enrolment is demanded
+    again at the next sign-in. The caller holds the user row's lock and
+    commits.
     """
     for model in (MfaCredential, MfaRecoveryCode, MfaChallenge):
         db.query(model).filter(model.user_id == user.id).delete(
             synchronize_session=False
         )
+    from mosp.services import sso_emails
+    from mosp.services.errors import DomainError
+
+    if keep_identity is not None and link_address is not None:
+        raise ValueError("Keep an identity or give a linking address, not both")
+    if link_address is not None:
+        try:
+            link_address = sso_emails.clean_email(link_address)
+        except DomainError:
+            raise ValueError("Invalid email address") from None
+        if sso_emails.claimed_elsewhere(db, user, link_address):
+            raise ValueError("That address cannot be linked to this account")
+    linked = db.query(UserIdentity).filter(
+        UserIdentity.user_id == user.id, UserIdentity.provider != "ldap"
+    )
+    if keep_identity is not None:
+        if linked.filter(UserIdentity.id == keep_identity).count() != 1:
+            raise ValueError("The account has no such SSO identity")
+        linked = linked.filter(UserIdentity.id != keep_identity)
+    if keep_identity is not None or link_address or signs_in_without_sso(user):
+        linked.delete(synchronize_session=False)
+        for linking in (SsoEmailChallenge, UserSsoEmail):
+            db.query(linking).filter(linking.user_id == user.id).delete(
+                synchronize_session=False
+            )
+    if link_address:
+        db.add(UserSsoEmail(email=link_address, user_id=user.id, verified_at=now()))
     user.mfa_enabled = False
     user.mfa_totp_secret = None
     user.mfa_totp_last_step = -1
     user.mfa_version += 1
+    user.session_version += 1
     clear_wrong_codes(user)
     audit(db, user, "operator-reset")
 

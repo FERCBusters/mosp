@@ -14,7 +14,9 @@ from mosp.services import outbox
 from mosp.services.mailer import send_email, smtp_configured
 
 
-def enqueue(db, user, event, *, ip=None):
+def enqueue(db, user, event, *, ip=None, detail=None):
+    """Queue the account holder's notice of ``event``; ``detail`` names what it
+    concerns, such as the sign-in identity a link added."""
     recipient = single_mailbox(user.email)
     if not smtp_configured() or not recipient:
         return
@@ -23,6 +25,8 @@ def enqueue(db, user, event, *, ip=None):
     titles = {
         "sso-email-added": f"An SSO email address was verified for your {app} account",
         "sso-email-removed": f"An SSO email address was removed from your {app} account",
+        "sso-identity-linked": f"A sign-in identity was linked to your {app} account",
+        "sso-identity-removed": f"A sign-in identity was removed from your {app} account",
         "login-ip": "Sign-in from an unfamiliar IP address",
         "password-changed": f"Your {app} password was changed",
         "password-reset": f"Your {app} password was reset by an administrator",
@@ -37,12 +41,18 @@ def enqueue(db, user, event, *, ip=None):
     own = hooks.security_notice(event)
     title = own[0] if own else titles[event]
     body = f"{title}.\n\nAccount: {user.username}\n{app} installation: {settings.public_base_url}\nTime (UTC): {now().isoformat(timespec='seconds')}Z\nIP address: {address}\n\n"
+    if detail:
+        body += detail + "\n\n"
     if own:
         body += own[1] + "\n\n"
     elif event == "login-ip":
         body += "This address has not previously been recorded for a successful sign-in to this account. A VPN, mobile connection or changing ISP address can cause this alert.\n\n"
     elif event == "verification-ended":
         body += f"Your password was accepted and {CODE_ATTEMPTS} incorrect authenticator or recovery codes were entered within an hour, so {app} accepts no code for this account for the next hour; a security key still signs you in. If this was not you, someone may know your password: change it and contact your {app} administrator.\n\n"
+    elif event == "sso-identity-linked":
+        body += f"This identity can now sign in to your account without your {app} password or authenticator. If you do not recognise it, remove it from your account's linked sign-in identities, which also removes the address it was linked through, or ask your {app} administrator to reset your account.\n\n"
+    elif event == "sso-identity-removed":
+        body += "Every session of your account has ended. Remove any address or identity above that you do not recognise.\n\n"
     elif event == "verified-recovery":
         body += "Each recovery code works once. Replace your recovery codes under Account, Security when few remain.\n\n"
     body += f"If this was you, no action is needed. If you do not recognise this activity, open your known {app} address directly and contact your {app} administrator. Review your password and authenticators.\n"

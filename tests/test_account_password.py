@@ -105,9 +105,27 @@ def test_attempts_are_limited_for_each_account_and_address(site, monkeypatch):
     assert user.password_hash == original
 
     monkeypatch.setattr(settings, "password_change_rate_limit_per_account", 100)
-    # The address has made three attempts; its own allowance refuses too.
-    monkeypatch.setattr(settings, "login_rate_limit_per_ip", 3)
+    # Only the two attempts the account admitted were charged to the address;
+    # past the address's own allowance a change is refused too, and the
+    # account has that attempt back.
+    monkeypatch.setattr(settings, "login_rate_limit_per_ip", 2)
     assert _change(client, PASSWORD) == limited
+    assert site.store.zcard(f"testapp:rl:password_change:account:{user.id}") == 2
+
+
+def test_one_account_cannot_spend_its_addresss_allowance_for_others(site, monkeypatch):
+    monkeypatch.setattr(settings, "login_rate_limit_per_ip", 4)
+    monkeypatch.setattr(settings, "password_change_rate_limit_per_account", 2)
+    busy, neighbour = site.user(), site.user()
+    client = site.client(busy)
+    for _ in range(6):
+        _change(client, "wrong")
+    # The busy account's refused attempts left the address with two.
+    other = site.client(neighbour)
+    assert _change(other, "wrong") == (
+        400,
+        {"detail": "Current password is incorrect"},
+    )
 
 
 def test_without_the_store_no_change_is_attempted(site, monkeypatch):
@@ -121,6 +139,31 @@ def test_without_the_store_no_change_is_attempted(site, monkeypatch):
         503,
         {"detail": "Service temporarily unavailable. Please try again later."},
     )
+
+
+def test_a_change_ends_sessions_opened_through_sso(site, monkeypatch):
+    from mosp.core.valkey import get_valkey
+    from mosp.security.auth import cookie_name
+    from mosp.security.sessions import create_session
+
+    monkeypatch.setattr(settings, "oidc_enabled", True)
+    user = site.user()
+    client = site.client(user)
+    sso = site.client()
+    sso.cookies.set(
+        cookie_name(),
+        create_session(
+            get_valkey(),
+            user_id=str(user.id),
+            ttl_seconds=600,
+            auth_method="oidc",
+            session_version=user.session_version,
+        ),
+    )
+    assert sso.get("/v1/auth/check").status_code == 204
+
+    assert _change(client, PASSWORD) == (200, {"ok": True})
+    assert sso.get("/v1/auth/check").status_code == 401
 
 
 def test_a_new_password_ends_every_browsers_recognition(site, monkeypatch):

@@ -191,6 +191,7 @@ MOSP_POLICY = RoutePolicy(
                 "/v1/me/sso-emails/request",
                 "/v1/me/sso-emails/confirm",
                 "/v1/me/sso-emails/remove",
+                "/v1/me/sso-identities/remove",
             ),
         )
     ),

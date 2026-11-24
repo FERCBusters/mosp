@@ -127,6 +127,24 @@ def test_custom_redaction_extends_defaults_and_replace_is_explicit(monkeypatch):
             "see https://x.example/<alice@example.test>",
             "see https://x.example/[MASKED_EMAIL]",
         ),
+        # A link's query string carries the at sign percent-encoded.
+        (
+            "https://ci.example/runs?by=ada%40example.org&n=2",
+            "https://ci.example/runs?by=%5BMASKED_EMAIL%5D&n=2",
+        ),
+        ("by=ada%40example.org&n=2", "by=[MASKED_EMAIL]&n=2"),
+        (
+            "see https://t.example/t?from=2001%3Adb8%3A%3A7&q=erin%40example.org+x",
+            "see https://t.example/t?from=%5BMASKED_IP%5D&q=%5BMASKED_EMAIL%5D+x",
+        ),
+        (
+            "https://x.example/#ip=192.0.2.1%2C198.51.100.4",
+            "https://x.example/#ip=%5BMASKED_IP%5D%2C%5BMASKED_IP%5D",
+        ),
+        ("https://x.example/a?q=50%40+off", "https://x.example/a?q=50%40+off"),
+        ("https://x.example/a?%zz", "https://x.example/a?%zz"),
+        ("http://[::1", "http://[[MASKED_IP]"),
+        ("50%40 off", "50%40 off"),
         # Longer dotted tokens are left alone as versions or host names.
         ("build 1.2.3.4.5", "build 1.2.3.4.5"),
         ("host 192.0.2.1a", "host 192.0.2.1a"),

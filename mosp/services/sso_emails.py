@@ -15,7 +15,7 @@ from mosp.core.email_address import compared_mailbox
 from mosp.core.valkey import get_valkey
 from mosp.host import hooks
 from mosp.host.config import settings
-from mosp.host.models import SsoEmailChallenge, User, UserSsoEmail
+from mosp.host.models import SsoEmailChallenge, User, UserIdentity, UserSsoEmail
 from mosp.security.encoding import digest
 from mosp.security.rate_limit import fixed_window_allow
 from mosp.security.sessions import get_session
@@ -31,6 +31,10 @@ class Address(BaseModel):
 
 class Proof(BaseModel):
     token: str = Field(min_length=20, max_length=128)
+
+
+class IdentityRef(BaseModel):
+    id: int = Field(ge=1)
 
 
 def clean_email(value):
@@ -66,7 +70,8 @@ def recent_signin(session_id, user):
     if not valid:
         raise DomainError(
             403,
-            "Sign out and sign in again, then manage SSO email addresses within five minutes",
+            "Sign out and sign in again, then manage SSO email addresses and "
+            "sign-in identities within five minutes",
         )
 
 
@@ -217,3 +222,94 @@ def remove_address(
         enqueue(db, user, "sso-email-removed", ip=context.client_ip)
     db.commit()
     return {"ok": True}
+
+
+def linked_identities(db, user):
+    """The account's sign-in identities from SSO providers.
+
+    A directory account's LDAP identity is the directory's to manage, so it is
+    neither listed nor removable here.
+    """
+    return db.query(UserIdentity).filter(
+        UserIdentity.user_id == user.id, UserIdentity.provider != "ldap"
+    )
+
+
+def list_identities(*, user, db: Session):
+    return {
+        "identities": [
+            {
+                "id": i.id,
+                "provider": i.provider,
+                "email": i.email,
+                "name": i.display_name or i.preferred_username,
+                "linked_at": i.created_at.isoformat(),
+                "last_used_at": i.updated_at.isoformat(),
+            }
+            for i in linked_identities(db, user).order_by(
+                UserIdentity.created_at, UserIdentity.id
+            )
+        ]
+    }
+
+
+def remove_identity(
+    *, payload: IdentityRef, context: ChangeContext, user, db: Session, session_id: str
+):
+    """Unlink one of the account's sign-in identities and end every session.
+
+    The account's sessions do not record which identity opened them, so all of
+    them end. The linking address the identity was linked through goes too,
+    as does every pending address proof: while the account keeps an address
+    the provider reports as verified, the identity would link again at its
+    next sign-in. The account's only way to sign in is not removed. The notice
+    names the addresses and identities left, so the holder can review them.
+    """
+    from mosp.security.mfa import signs_in_without_sso
+
+    recent_signin(session_id, user)
+    user = lock_user(db, user)
+    identity = (
+        linked_identities(db, user)
+        .filter(UserIdentity.id == payload.id)
+        .with_for_update()
+        .one_or_none()
+    )
+    if identity is None:
+        return {"ok": True}
+    others = linked_identities(db, user).filter(UserIdentity.id != identity.id)
+    if not signs_in_without_sso(user) and not others.count():
+        raise DomainError(
+            409,
+            "This identity is the account's only way to sign in; link another "
+            "before removing it",
+        )
+    db.query(SsoEmailChallenge).filter(SsoEmailChallenge.user_id == user.id).delete(
+        synchronize_session=False
+    )
+    if identity.email:
+        db.query(UserSsoEmail).filter(
+            UserSsoEmail.user_id == user.id, UserSsoEmail.email == identity.email
+        ).delete(synchronize_session=False)
+    removed = identity.email or identity.preferred_username or identity.subject
+    db.delete(identity)
+    db.flush()
+    addresses = [
+        a.email
+        for a in db.query(UserSsoEmail)
+        .filter(UserSsoEmail.user_id == user.id)
+        .order_by(UserSsoEmail.email)
+    ]
+    remaining = [
+        f"{i.provider}: {i.email or i.preferred_username or i.subject}"
+        for i in others.order_by(UserIdentity.created_at, UserIdentity.id)
+    ]
+    detail = (
+        f"Identity removed: {removed}\n"
+        f"Linking addresses still on the account: {', '.join(addresses) or 'none'}\n"
+        f"Sign-in identities still linked: {', '.join(remaining) or 'none'}"
+    )
+    user.session_version += 1
+    enqueue(db, user, "sso-identity-removed", ip=context.client_ip, detail=detail)
+    db.commit()
+    return {"ok": True, "addresses": addresses, "identities": remaining}

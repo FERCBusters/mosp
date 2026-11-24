@@ -35,7 +35,7 @@ def start_management(
     user = get_current_user_from_request(request, db)
     if not user:
         raise HTTPException(401, "Sign in before managing local account security")
-    mfa.limit(request, user.id)
+    mfa.limit(request, user.id, address=True)
     if user.auth_backend == "ldap":
         from mosp.security.ldap import verify_ldap_user
 

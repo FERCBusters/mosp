@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import secrets
+
 from sqlalchemy.orm import Session
 
 from mosp import host
@@ -10,37 +12,48 @@ from mosp.core.valkey import get_valkey
 from mosp.host.config import settings
 from mosp.host.models import User
 from mosp.security.passwords import hash_password, verify_password
-from mosp.security.rate_limit import address_window_allow, fixed_window_allow
+from mosp.security.rate_limit import (
+    address_window_allow,
+    sliding_window_allow,
+    sliding_window_take_back,
+)
 from mosp.services.context import ChangeContext, signed_in_user
 from mosp.services.errors import DomainError
 
 
 def _within_allowances(context: ChangeContext, user: User) -> None:
-    """Refuse a change past the address's or the account's allowance.
+    """Refuse a change past the account's or the address's allowance.
 
-    Both fail closed: without the store, no change is attempted.
+    The account's allowance is checked first and counts attempts in any
+    window, so a session holder cannot test many current passwords by
+    spreading them across addresses or window boundaries. Only an attempt it
+    admits is charged to the address, and one the address refuses is handed
+    back, so one account cannot use up the allowance of the others behind its
+    address. Both fail closed: without the store, no change is attempted.
     """
     try:
         r = get_valkey()
         window = settings.login_rate_limit_window_seconds
-        ok, _ = address_window_allow(
+        account = f"{host.name()}:rl:password_change:account:{user.id}"
+        attempt = secrets.token_hex(16)
+        ok, _ = sliding_window_allow(
             r,
-            "password_change",
-            context.client_ip,
-            settings.login_rate_limit_per_ip,
+            account,
+            settings.password_change_rate_limit_per_account,
             window,
-            fail_closed=True,
+            member=attempt,
         )
-        # A session holder must not be able to test many current passwords by
-        # spreading attempts across addresses.
         if ok:
-            ok, _ = fixed_window_allow(
+            ok, _ = address_window_allow(
                 r,
-                f"{host.name()}:rl:password_change:user:{user.id}",
-                settings.password_change_rate_limit_per_account,
+                "password_change",
+                context.client_ip,
+                settings.login_rate_limit_per_ip,
                 window,
                 fail_closed=True,
             )
+            if not ok:
+                sliding_window_take_back(r, account, attempt)
     except Exception:
         raise DomainError(
             status_code=503,
@@ -58,8 +71,10 @@ def change_password(
 ) -> dict:
     """Change the signed-in account's password after checking its current one.
 
-    The change ends the account's other sessions (its second-factor version
-    moves on), ends every browser's recognition and tells the account holder.
+    The change ends every session of the account, however it was opened: its
+    session version moves on, and its second-factor version too, so pending
+    second-factor and SSO address ceremonies end. It also ends every browser's
+    recognition and tells the account holder.
     """
     user = signed_in_user(context)
     _within_allowances(context, user)
@@ -92,6 +107,7 @@ def change_password(
     except ValueError as error:
         raise DomainError(status_code=400, detail=str(error)) from None
     user.mfa_version += 1
+    user.session_version += 1
 
     from mosp.services.security_notifications import enqueue
 

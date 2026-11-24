@@ -485,7 +485,9 @@ def _email_is_verified(provider: SsoProvider, claims: dict[str, Any]) -> bool:
 
 
 def _update_identity_metadata(identity: UserIdentity, claims: dict[str, Any]) -> None:
-    identity.email = _claim_email(claims) or identity.email
+    # The email stays the linking address the identity was linked through,
+    # whatever the provider reports later: removing the identity removes that
+    # address, so a provider account cannot move it out of reach.
     identity.preferred_username = (
         str(
             claims.get("preferred_username") or identity.preferred_username or ""
@@ -517,7 +519,12 @@ def sso_attempt(request: Request) -> str | None:
 
 
 def _get_or_create_user_for_identity(
-    db: Session, *, provider: SsoProvider, subject: str, claims: dict[str, Any]
+    db: Session,
+    *,
+    provider: SsoProvider,
+    subject: str,
+    claims: dict[str, Any],
+    ip: str | None = None,
 ) -> User:
     issuer = _canonical_issuer(provider)
     hooks.sso_identity_allowed(provider.key, issuer, subject)
@@ -585,10 +592,21 @@ def _get_or_create_user_for_identity(
         display_name=str(claims.get("name") or "").strip() or None,
         claims=claims or {},
     )
+    from mosp.services.security_notifications import enqueue
+
     try:
         user.last_login_at = _now()
         db.add(user)
         db.add(identity)
+        # The account holder learns of every identity that can now sign in.
+        enqueue(
+            db,
+            user,
+            "sso-identity-linked",
+            ip=ip,
+            detail=f"Provider: {provider.label}\nIdentity: "
+            + (email or identity.preferred_username or subject),
+        )
         db.commit()
         db.refresh(user)
     except IntegrityError as exc:
@@ -716,7 +734,11 @@ async def _fetch_github_claims(
 
 
 async def _handle_github_callback(
-    code: str, db: Session, provider: SsoProvider, row: OidcLoginState
+    code: str,
+    db: Session,
+    provider: SsoProvider,
+    row: OidcLoginState,
+    ip: str | None = None,
 ) -> tuple[User, str | None, str | None]:
     redirect_uri = provider.redirect_uri
     client = _new_client(provider, redirect_uri=redirect_uri)
@@ -738,6 +760,7 @@ async def _handle_github_callback(
             provider=provider,
             subject=subject,
             claims=claims,
+            ip=ip,
         )
     )
     next_url = _normalize_next(row.next_url) or None
@@ -745,7 +768,11 @@ async def _handle_github_callback(
 
 
 async def _handle_oidc_callback(
-    code: str, db: Session, provider: SsoProvider, row: OidcLoginState
+    code: str,
+    db: Session,
+    provider: SsoProvider,
+    row: OidcLoginState,
+    ip: str | None = None,
 ) -> tuple[User, str | None, str | None]:
     issuer_values = _split_csv(provider.issuer)
     if not issuer_values:
@@ -845,6 +872,7 @@ async def _handle_oidc_callback(
             provider=provider,
             subject=subject,
             claims=claims_dict,
+            ip=ip,
         )
     )
     next_url = _normalize_next(row.next_url) or None
@@ -891,15 +919,18 @@ async def handle_callback(
     # From here the callback completes or refuses a sign-in this browser began.
     request.state.sso_provider = provider.key
     code = _authorization_code(request)
+    from mosp.security.rate_limit import client_ip
+
+    ip = client_ip(request)
 
     try:
         if provider.kind == "github":
             user, next_url, id_token = await _handle_github_callback(
-                code, db, provider, row
+                code, db, provider, row, ip
             )
         else:
             user, next_url, id_token = await _handle_oidc_callback(
-                code, db, provider, row
+                code, db, provider, row, ip
             )
     except (
         JoseError,

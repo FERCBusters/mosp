@@ -101,28 +101,19 @@ def test_a_totp_secret_under_another_key_is_reported_and_not_counted(
     assert client.post("/v1/auth/mfa/finish", headers=ORIGIN).status_code == 200
 
 
-def test_a_spent_address_allowance_refuses_codes_before_the_accounts_own(
+def test_a_spent_address_allowance_leaves_a_pending_ceremonys_steps_alone(
     ceremony,
 ):
     client = ceremony.sign_in()
     store = ceremony.site.store
-    # Test clients have no parseable address, so they share "unknown".
+    # Other accounts behind the same address have spent its allowance (test
+    # clients have no parseable address, so they share "unknown"). This
+    # account's password is proven, so its second factor still completes.
     store.set("testapp:rl:mfa:ip:unknown", 40, ex=300)
 
-    refused = ceremony.code(client, ceremony.good)
-
-    assert (refused.status_code, refused.json()) == (
-        429,
-        {"detail": "Too many verification attempts; try again later"},
-    )
-    assert store.get(f"testapp:rl:mfa:user:{ceremony.user.id}") is None
-    user = _fresh(ceremony.site.db, ceremony.user)
-    assert (user.mfa_code_failures, user.mfa_totp_last_step) == (0, -1)
-    refused_2 = client.get("/v1/auth/check")
-    assert (refused_2.status_code, refused_2.json()) == (
-        401,
-        {"detail": "Not authenticated"},
-    )
+    assert ceremony.code(client, ceremony.good).status_code == 200
+    assert int(store.get("testapp:rl:mfa:ip:unknown")) == 40
+    assert store.zcard(f"testapp:rl:mfa:account:{ceremony.user.id}") == 1
 
 
 @pytest.mark.parametrize(
@@ -329,3 +320,64 @@ def test_an_operator_reset_removes_every_factor_and_any_refusal(site):
     assert [
         row.path for row in site.db.query(AuditLog).filter_by(username=user.username)
     ] == ["/v1/auth/mfa/operator-reset"]
+
+
+def test_one_account_cannot_spend_its_addresss_allowance_for_others(site):
+    from fastapi import HTTPException
+    from starlette.requests import Request
+
+    request = Request(
+        {"type": "http", "headers": [], "client": ("203.0.113.7", 1), "path": "/"}
+    )
+    store = site.store
+
+    def admitted(user_id, address=False):
+        try:
+            mfa.limit(request, user_id, address=address)
+        except HTTPException as refused:
+            assert refused.status_code == 429
+            return False
+        return True
+
+    # An account's fifteen steps in any 300 seconds are admitted; the rest are
+    # refused without being charged to the address.
+    assert [admitted("busy", address=True) for _ in range(40)] == [True] * 15 + [
+        False
+    ] * 25
+    assert int(store.get("testapp:rl:mfa:ip:203.0.113.7")) == 15
+    # Other accounts' starts take the rest of the address's forty, and a start
+    # the spent address refuses is handed back to its account.
+    assert all(admitted("first", address=True) for _ in range(15))
+    assert [admitted("second", address=True) for _ in range(11)] == [True] * 10 + [
+        False
+    ]
+    assert store.zcard("testapp:rl:mfa:account:second") == 10
+    # Steps of a pending ceremony are counted against their account alone.
+    assert all(admitted("third") for _ in range(15))
+    assert admitted("third") is False
+    assert int(store.get("testapp:rl:mfa:ip:203.0.113.7")) == 41
+
+
+def test_an_account_cannot_double_its_steps_across_a_window_boundary(site, monkeypatch):
+    from fastapi import HTTPException
+    from starlette.requests import Request
+
+    from mosp.security import rate_limit
+
+    request = Request(
+        {"type": "http", "headers": [], "client": ("203.0.113.8", 1), "path": "/"}
+    )
+    clock = [1_000_000.0]
+    real = rate_limit.sliding_window_allow
+    monkeypatch.setattr(
+        mfa,
+        "sliding_window_allow",
+        lambda *a, **kw: real(*a, now=clock[0], **kw),
+    )
+    for _ in range(15):
+        mfa.limit(request, "edge")
+    clock[0] += 299
+    with pytest.raises(HTTPException):
+        mfa.limit(request, "edge")
+    clock[0] += 2
+    mfa.limit(request, "edge")

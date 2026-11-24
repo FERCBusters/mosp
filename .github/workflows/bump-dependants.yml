@@ -4,7 +4,10 @@ name: Bump dependants
 # application built on mosp: its pyproject.toml pin and poetry.lock are updated
 # on an autobot/mosp-* branch of that repository and offered in a pull request,
 # where the application's own CI runs. This workflow never approves or merges,
-# and an application that does not use mosp yet is left alone.
+# and an application that does not use mosp yet is left alone. The
+# autobot/mosp- branches are the App's own: only pull requests the App opened
+# from them count as proposals, so close any left open by an App this one
+# replaces.
 #
 # A GitHub App opens the pull requests, so they start the applications' CI.
 # Install an App on mosp, keen, midena and ospmae with Contents and Pull
@@ -131,17 +134,29 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           GH_REPO: ${{ env.TARGET }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
         working-directory: target
         run: |
           set -euo pipefail
+          : "${APP_SLUG:?The GitHub App token step gave no app-slug}"
           report="$RUNNER_TEMP/mosp-bump"
           branch="${BRANCH_PREFIX}${COMMIT:0:12}"
           git config --global --add safe.directory "$PWD"
 
+          # Only the App's own pull requests count: one from a branch in this
+          # repository, which only its writers can create, opened by the App.
+          # Anyone can open a pull request from a fork branch of the same name,
+          # and --head matches the branch name alone. gh names an App author
+          # app/<slug>; the GitHub API names it <slug>[bot].
+
           # A pull request for exactly this commit already settles it,
           # including one a maintainer closed.
-          existing=$(gh pr list --state all --head "$branch" --json number,state \
-            --jq 'first // empty | "\(.number) \(.state)"')
+          existing=$(gh pr list --state all --head "$branch" --limit 100 \
+              --json number,state,isCrossRepository,author \
+            | jq -r --arg app "$APP_SLUG" \
+              '[.[] | select(.isCrossRepository == false and .author.is_bot
+                  and (.author.login | ltrimstr("app/") | rtrimstr("[bot]")) == $app)]
+                | first // empty | "\(.number) \(.state)"')
           if [ -n "$existing" ]; then
             read -r number state <<< "$existing"
             echo "Pull request #$number ($state) already proposes this commit."
@@ -180,10 +195,14 @@ jobs:
           fi
 
           # An older mosp commit's proposal is superseded by this one.
-          gh pr list --state open --limit 100 --json number,headRefName,author \
-            | jq -r --arg prefix "$BRANCH_PREFIX" --arg branch "$branch" \
-              '.[] | select(.author.is_bot and (.headRefName | startswith($prefix))
-                and .headRefName != $branch) | .number' \
+          gh pr list --state open --limit 100 \
+              --json number,headRefName,isCrossRepository,author \
+            | jq -r --arg app "$APP_SLUG" --arg prefix "$BRANCH_PREFIX" \
+              --arg branch "$branch" \
+              '.[] | select(.isCrossRepository == false and .author.is_bot
+                and (.author.login | ltrimstr("app/") | rtrimstr("[bot]")) == $app
+                and (.headRefName | startswith($prefix)) and .headRefName != $branch)
+                | .number' \
             | while read -r older; do
                 gh pr close "$older" --delete-branch --comment "Superseded by #$number."
               done

@@ -1,4 +1,5 @@
-"""Self-service, proof-of-ownership addresses for automatic SSO linking."""
+"""Self-service, proof-of-ownership addresses for automatic SSO linking, and
+the sign-in identities linked through them."""
 
 from __future__ import annotations
 
@@ -11,7 +12,7 @@ from mosp.host.db import get_db
 from mosp.security.auth import cookie_name as session_cookie_name
 from mosp.security.auth import require_authenticated
 from mosp.services import sso_emails as service
-from mosp.services.sso_emails import Address, Proof
+from mosp.services.sso_emails import Address, IdentityRef, Proof
 
 router = Router()
 
@@ -57,6 +58,27 @@ def remove_address(
     db: Session = Depends(get_db),
 ):
     return service.remove_address(
+        payload=payload,
+        context=change_context(request),
+        user=user,
+        db=db,
+        session_id=request.cookies.get(session_cookie_name(), ""),
+    )
+
+
+@router.get("/v1/me/sso-identities")
+def list_identities(user=Depends(require_authenticated), db: Session = Depends(get_db)):
+    return service.list_identities(user=user, db=db)
+
+
+@router.post("/v1/me/sso-identities/remove")
+def remove_identity(
+    payload: IdentityRef,
+    request: Request,
+    user=Depends(require_authenticated),
+    db: Session = Depends(get_db),
+):
+    return service.remove_identity(
         payload=payload,
         context=change_context(request),
         user=user,

@@ -22,6 +22,7 @@ __all__ = [
     "login_name",
     "printable_name",
     "sliding_window_allow",
+    "sliding_window_take_back",
 ]
 
 
@@ -127,6 +128,12 @@ def fixed_window_allow(
         return True, 0
 
 
+def sliding_window_take_back(r: Redis, key: str, member: str) -> None:
+    """Uncount an attempt ``sliding_window_allow`` admitted as ``member``, as
+    when a second allowance then refuses it."""
+    r.zrem(key, member)
+
+
 def fixed_window_spend(
     r: Redis,
     key: str,
@@ -169,6 +176,7 @@ def sliding_window_allow(
     *,
     fail_closed: bool = True,
     now: float | None = None,
+    member: str | None = None,
 ) -> Tuple[bool, int]:
     """Admit at most ``limit`` attempts in any ``window_seconds``.
 
@@ -178,12 +186,13 @@ def sliding_window_allow(
     attempt is added and counted in one transaction; one that would pass the
     limit is taken back and refused, with the wait until the oldest counted
     attempt leaves. Attempts made together may each be refused where one
-    would have been admitted, never the other way round.
+    would have been admitted, never the other way round. A caller that names
+    the attempt (``member``) can hand it back with ``sliding_window_take_back``.
     """
     if limit <= 0 or window_seconds <= 0:
         return True, 0
     moment = time.time() if now is None else float(now)
-    member = uuid.uuid4().hex
+    member = member or uuid.uuid4().hex
     try:
         pipe = r.pipeline(transaction=True)
         pipe.zremrangebyscore(key, "-inf", moment - window_seconds)

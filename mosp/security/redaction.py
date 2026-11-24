@@ -48,7 +48,8 @@ MASKED_IP = "[MASKED_IP]"
 
 _EMAIL_RE = scan_pattern(
     r"(?<![A-Z0-9._%+-])"
-    r"([A-Z0-9._%+-]{1,128})@([A-Z0-9.-]+\.[A-Z]{2,63})"
+    # A link's query string carries the at sign percent-encoded.
+    r"([A-Z0-9._%+-]{1,128})(?:@|%40)([A-Z0-9.-]+\.[A-Z]{2,63})"
     # A trailing full stop ends a sentence; only ".<alnum>" continues the domain.
     r"(?![A-Z0-9_%+-]|\.[A-Z0-9])",
     re.IGNORECASE,
@@ -458,11 +459,41 @@ def redact_obj(obj: Any) -> Any:
     return walk(obj, 1)
 
 
+def _mask_link(m: re.Match) -> str:
+    """A link with its query and fragment values masked as decoded text.
+
+    Redaction re-encodes a link's query string, where an at sign, a colon or a
+    neighbouring space is percent-encoded and an address no longer reads as
+    one.
+    """
+    url = m.group(0)
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+
+    def values(text: str) -> str:
+        if "=" not in text:
+            return text
+        pairs = parse_qsl(text, keep_blank_values=True)
+        hidden = [(_mask_text(k), _mask_text(v)) for k, v in pairs]
+        return urlencode(hidden) if hidden != pairs else text
+
+    query, fragment = values(parts.query), values(parts.fragment)
+    if (query, fragment) == (parts.query, parts.fragment):
+        return url
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, query, fragment))
+
+
 def mask_event_data_str(s: str | None) -> str | None:
-    """Mask IP-address and email-address substrings in event data."""
+    """Mask IP-address and email-address substrings in event data, including
+    those a link's query string holds percent-encoded."""
     if s is None:
         return None
-    txt = str(s)
+    return _mask_text(_URL_RE.sub(_mask_link, str(s)))
+
+
+def _mask_text(txt: str) -> str:
     txt = _MAILBOX_RE.sub(MASKED_EMAIL, txt)
     txt = _EMAIL_RE.sub(MASKED_EMAIL, txt)
 

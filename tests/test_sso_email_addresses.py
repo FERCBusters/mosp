@@ -221,7 +221,7 @@ def test_requests_need_mail_https_and_a_recent_sign_in(account, monkeypatch):
         403,
         {
             "detail": "Sign out and sign in again, then manage SSO email addresses"
-            " within five minutes"
+            " and sign-in identities within five minutes"
         },
     )
     assert post("request", email="a@example.org") == stale
