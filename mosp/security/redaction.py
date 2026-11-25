@@ -33,6 +33,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from mosp import host
 from mosp.host import hooks
+from mosp.security import api_token_format
 from mosp.security.json_shape import (
     MAX_DEPTH,
     NESTED_TOO_DEEPLY,
@@ -214,7 +215,9 @@ def _redact_containers(txt: str) -> str:
 
 def _redact_issued_secrets(text: str) -> str:
     """Replace the tokens and keys the application issues, wherever they
-    appear (``hooks.issued_secret_pattern``)."""
+    appear: mosp's API tokens, and the application's own
+    (``hooks.issued_secret_pattern``)."""
+    text = api_token_format.pattern().sub(REDACTED, text)
     pattern = hooks.issued_secret_pattern()
     return text if pattern is None else pattern.sub(REDACTED, text)
 

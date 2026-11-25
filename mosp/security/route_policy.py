@@ -119,6 +119,9 @@ class RoutePolicy:
     # set: then it is refused for everyone, so a route added without a
     # decision about who may call it is closed rather than open.
     refuse_undeclared_writes: bool = False
+    # Reads an API token may make (mosp.security.api_tokens), as GET path
+    # templates; a token reaches no other route. Empty: tokens reach nothing.
+    token_reads: RouteSet = field(default_factory=RouteSet)
     # Paths whose requests the audit trail leaves out, and public reads it
     # leaves out (documents anyone may fetch at any rate).
     unaudited_paths: frozenset[str] = frozenset()
@@ -139,6 +142,7 @@ class RoutePolicy:
             refuse_undeclared_writes=(
                 self.refuse_undeclared_writes or other.refuse_undeclared_writes
             ),
+            token_reads=self.token_reads | other.token_reads,
             unaudited_paths=self.unaudited_paths | other.unaudited_paths,
             unaudited_public_reads=self.unaudited_public_reads
             | other.unaudited_public_reads,
@@ -195,6 +199,9 @@ MOSP_POLICY = RoutePolicy(
             ),
         )
     ),
+    # Issuing and revoking API tokens (mosp.api.routes.api_tokens), in
+    # whichever application serves those routes.
+    admin_prefixes=("/v1/admin/api-tokens",),
     unaudited_public_reads=frozenset({"/v1/auth/methods"}),
 )
 
@@ -250,6 +257,15 @@ def is_admin_write(request) -> bool:
 
 def refuses_undeclared_writes() -> bool:
     return policy().refuse_undeclared_writes
+
+
+def is_token_read(request) -> bool:
+    """Whether an API token may make this request: a GET (or HEAD) of a route
+    the policy lists in ``token_reads``."""
+    method = request.method.upper()
+    return method in {"GET", "HEAD"} and policy().token_reads.matches(
+        "GET", policy_path(request)
+    )
 
 
 def admin_only(method: str, path: str) -> bool:

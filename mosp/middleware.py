@@ -29,6 +29,7 @@ from mosp.host import hooks
 from mosp.host.config import settings
 from mosp.host.db import SessionLocal
 from mosp.host.models import AuditLog, User
+from mosp.security import api_tokens
 from mosp.security.auth import ROLE_ADMIN, create_user, get_current_user_from_request
 from mosp.security.client_ip import request_ip
 from mosp.security.csrf import (
@@ -87,9 +88,14 @@ async def csrf_middleware(request: Request, call_next):
 
     # Only enforce CSRF for authenticated browser sessions. An in-process
     # request (an MCP tool's) carries its credential in the ASGI scope, which
-    # no browser can set, and no cookie.
+    # no browser can set, and no cookie; a request an API token verified
+    # carries its credential in a header no browser sends by itself, and only
+    # reads (mosp.security.api_tokens).
     user = getattr(request.state, "user", None)
-    inner = getattr(request.state, "inner_client", None) is not None
+    inner = (
+        getattr(request.state, "inner_client", None) is not None
+        or api_tokens.verified_token(request) is not None
+    )
     if user and not inner and request.method.upper() in UNSAFE_METHODS:
         if not csrf_valid(request):
             return JSONResponse(
@@ -141,6 +147,10 @@ def authenticate(request: Request) -> JSONResponse | None:
     user = None
     try:
         found = hooks.inner_request_user(db, request)
+        token = api_tokens.presented(request) if found is hooks.NOT_INNER else None
+        if token is not None:
+            # An API token decides alone: the request's cookies are not read.
+            found = api_tokens.authenticate(db, request, token)
         if found is hooks.NOT_INNER:
             try:
                 user = get_current_user_from_request(request, db)

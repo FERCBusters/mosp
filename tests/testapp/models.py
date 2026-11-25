@@ -1,6 +1,7 @@
 """The test application's account tables, built from mosp's mixins."""
 
 from mosp.db.accounts import (
+    ApiTokenMixin,
     AuditLogMixin,
     GroupMixin,
     MfaChallengeMixin,
@@ -70,4 +71,8 @@ class SsoEmailChallenge(Base, SsoEmailChallengeMixin):
 
 
 class AuditLog(Base, AuditLogMixin):
+    pass
+
+
+class ApiToken(Base, ApiTokenMixin):
     pass

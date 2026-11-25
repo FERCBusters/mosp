@@ -7,7 +7,7 @@ from fastapi.exceptions import RequestValidationError
 
 from mosp import middleware
 from mosp.api.errors import domain_error_response, validation_error_response
-from mosp.api.routes import account, auth, mfa, sso_emails
+from mosp.api.routes import account, api_tokens, auth, mfa, sso_emails
 from mosp.api.routing import Router
 from mosp.realtime import sockets
 from mosp.security.auth import require_admin
@@ -92,7 +92,14 @@ app = FastAPI(
         RequestValidationError: validation_error_response,
     },
 )
-for router in (account.router, auth.router, mfa.router, sso_emails.router, own):
+for router in (
+    account.router,
+    api_tokens.router,
+    auth.router,
+    mfa.router,
+    sso_emails.router,
+    own,
+):
     app.include_router(router)
 middleware.install(app)
 app.add_middleware(RequestBodyLimitMiddleware)

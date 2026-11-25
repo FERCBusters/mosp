@@ -402,6 +402,41 @@ class UserSsoEmailMixin:
     )
 
 
+class ApiTokenMixin:
+    """Bearer tokens an administrator issues for one account, for another
+    application's reads (``mosp.security.api_tokens``).
+
+    Optional: an application that declares no ``ApiToken`` model accepts no
+    API token. Only the token's SHA-256 digest is kept, so a copy of the
+    database authenticates nothing; ``hint`` holds its last four characters,
+    which tell tokens apart in a listing.
+    """
+
+    __tablename__ = "api_tokens"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    hint: Mapped[str] = mapped_column(String(8), nullable=False)
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utcnow, nullable=False
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class AuditLogMixin:
     """The request audit trail (``mosp.middleware``)."""
 

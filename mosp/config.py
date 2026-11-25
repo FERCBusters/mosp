@@ -45,6 +45,11 @@ class MospSettings(BaseSettings):
     # them indefinitely.
     audit_log_retention_days: int = Field(default=400, ge=0, le=36500)
 
+    # Bearer API tokens (mosp.security.api_tokens): another application's
+    # reads as one account. Off, no token is accepted or issued, whatever the
+    # application declares; tokens already issued are kept and can be revoked.
+    api_tokens_enabled: bool = Field(default=False)
+
     # Diagnostics: label each SQL statement with the request or task that ran
     # it (mosp.db.sql_trace). Leave off in normal operation.
     sql_trace: bool = Field(default=False)

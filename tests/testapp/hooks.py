@@ -15,6 +15,7 @@ POLICY = RoutePolicy(
     gated=RouteCodes({("POST", "/v1/gated"): "gated.write"}),
     prefix_rules=(PrefixRule("/v1/reports", ("reports.run",)),),
     admin_prefixes=("/v1/admin", "/v1/users"),
+    token_reads=RouteSet({"GET": ("/v1/things",)}),
     unaudited_public_reads=frozenset({"/health"}),
 )
 

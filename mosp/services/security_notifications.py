@@ -36,6 +36,8 @@ def enqueue(db, user, event, *, ip=None, detail=None):
         "operator-reset": f"Your {app} two-factor authentication was reset by an operator",
         "verified-recovery": f"A recovery code was used for your {app} account",
         "verification-ended": f"{app} ended a two-factor verification after repeated incorrect codes",
+        "api-token-issued": f"An API token was issued for your {app} account",
+        "api-token-revoked": f"An API token for your {app} account was revoked",
     }
     # The application's own notices: a title and the paragraph explaining it.
     own = hooks.security_notice(event)
@@ -53,6 +55,8 @@ def enqueue(db, user, event, *, ip=None, detail=None):
         body += f"This identity can now sign in to your account without your {app} password or authenticator. If you do not recognise it, remove it from your account's linked sign-in identities, which also removes the address it was linked through, or ask your {app} administrator to reset your account.\n\n"
     elif event == "sso-identity-removed":
         body += "Every session of your account has ended. Remove any address or identity above that you do not recognise.\n\n"
+    elif event == "api-token-issued":
+        body += f"Another application holding this token can read, as your account, what {app} opens to API tokens, until the token is revoked or expires. It cannot sign in or change anything. If you did not expect this, ask your {app} administrator to revoke it.\n\n"
     elif event == "verified-recovery":
         body += "Each recovery code works once. Replace your recovery codes under Account, Security when few remain.\n\n"
     body += f"If this was you, no action is needed. If you do not recognise this activity, open your known {app} address directly and contact your {app} administrator. Review your password and authenticators.\n"
