@@ -41,6 +41,10 @@ def test_a_drawing_keeps_its_shapes_text_and_annotations():
         ('<use href="https://elsewhere.example/sprite.svg#x"/>', "elsewhere"),
         ('<rect fill="url(https://elsewhere.example/x)"/>', "elsewhere"),
         ('<rect style="background:url(https://elsewhere.example/x)"/>', "elsewhere"),
+        # A CSS escape spells "url(" without the letters: u\72l is url.
+        ('<rect fill="u\\72l(https://elsewhere.example/x)"/>', "elsewhere"),
+        ('<rect filter="\\75rl(https://elsewhere.example/x#f)"/>', "elsewhere"),
+        ('<rect stroke="ur\\6c (https://elsewhere.example/x)"/>', "elsewhere"),
         ('<rect class="javascript:x"/>', "javascript"),
         ('<rect xmlns="" class="outside"/>', "outside"),
         ("<style>@import url(https://elsewhere.example/x.css);</style>", "import"),
@@ -50,6 +54,14 @@ def test_a_drawing_keeps_its_shapes_text_and_annotations():
 )
 def test_what_runs_loads_or_leaves_the_document_is_dropped(body, gone):
     assert gone not in _clean(body)
+
+
+def test_an_annotation_keeps_a_backslash_it_cannot_act_on():
+    # data-* and aria-* are text the drawing tools keep for themselves.
+    stored = _clean('<rect aria-label="C:\\reports" data-id="a\\b" fill="red"/>')
+    assert 'aria-label="C:\\reports"' in stored
+    assert 'data-id="a\\b"' in stored
+    assert 'fill="red"' in stored
 
 
 def test_safe_styles_and_same_document_references_stay():

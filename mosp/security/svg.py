@@ -205,7 +205,12 @@ def _safe_value(name: str, value: str) -> bool:
         return False
     if name in {"href", f"{{{XLINK_NS}}}href"}:
         return bool(_FRAGMENT.fullmatch(value.strip()))
-    if name == "style" or "url(" in value.lower():
+    # A presentation attribute is read as CSS, where a backslash escape spells
+    # any character: "u\72l(" is "url(". So a value with a backslash is checked
+    # as CSS too, which refuses it, rather than only one that spells "url(".
+    # An annotation (data-*, aria-*) is inert text and may hold one.
+    css = name == "style" or "url(" in value.lower()
+    if css or ("\\" in value and not _ANNOTATION.fullmatch(name)):
         return not _UNSAFE_CSS.search(value)
     return True
 
